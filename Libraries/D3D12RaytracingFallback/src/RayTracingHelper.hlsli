@@ -20,10 +20,10 @@
 #define NumberOfFloatsPerVertex 3
 #define SizeOfVertex (NumberOfFloatsPerVertex * SizeOfFloat)
 #define NumberOfVerticesPerTriangle 3
-#define InvalidNodeIndex 9999999
-static const int IsLeafFlag = 0x80000000;
+static const int IsLeafFlag               = 0x80000000;
 static const int IsProceduralGeometryFlag = 0x40000000;
 static const int LeafFlags = IsLeafFlag | IsProceduralGeometryFlag;
+static const int MinNumberOfPrimitives = 1;
 
 // BVH description for the traversal shader
 //struct BVHOffsets
@@ -47,12 +47,6 @@ static const int OffsetToLeafNodeMetaDataOffset = 4;
 
 static const int OffsetToTotalSize = 12;
 
-
-int GetLeafIndexFromFlag(uint2 flag)
-{
-    return flag.x & ~LeafFlags;
-}
-
 // Reorganized AABB for faster intersection testing
 struct BoundingBox
 {
@@ -66,7 +60,7 @@ struct BoundingBox
 #define GetOffsetToInstanceDesc(pointer) \
     GetOffsetToOffset(pointer, OffsetToLeafNodeMetaDataOffset)
 
-int GetOffsetToBoxes(RWByteAddressBufferPointer pointer)
+int GetOffsetToAABBNodes(RWByteAddressBufferPointer pointer)
 {
     // Optimization, Boxes are always at a fixed location
     // after the header so no need to read the offset 
@@ -84,63 +78,159 @@ int GetOffsetToPrimitiveMetaData(RWByteAddressBufferPointer pointer)
     return GetOffsetToOffset(pointer, OffsetToPrimitiveMetaDataOffset);
 }
 
-bool IsLeaf(uint2 flag)
+bool IsLeaf(uint2 info)
 {
-    return (flag.x & IsLeafFlag);
+    return (info.y & IsLeafFlag);
 }
 
-bool IsProceduralGeometry(uint2 flag)
+bool IsProceduralGeometry(uint2 info)
 {
-    return (flag.x & IsProceduralGeometryFlag);
+    return (info.y & IsProceduralGeometryFlag);
 }
 
-uint2 CreateFlag(uint leftNodeIndex, uint rightNodeIndex)
+uint GetLeafIndexFromInfo(uint2 info)
 {
-    uint2 flag;
-    flag.x = leftNodeIndex & 0x00ffffff;
-    flag.y = rightNodeIndex;
-    return flag;
+    return info.x;
 }
 
-uint GetLeftNodeIndex(uint2 flag)
+uint GetChildIndexFromInfo(uint2 info)
 {
-    return  flag.x & 0x00ffffff;
+    return info.x;
 }
 
-uint GetRightNodeIndex(uint2 flag)
+uint GetNumPrimitivesFromInfo(uint2 info)
 {
-    return flag.y;
+    return GetNumPrimitivesFromPrimitiveFlags(info.y);
 }
 
-uint GetBoxAddress(uint startAddress, uint boxIndex)
+uint GetLeafFlagsFromPrimitiveFlags(uint flags)
+{
+    return flags & LeafFlags;
+}
+
+uint GetNumPrimitivesFromPrimitiveFlags(uint flags)
+{
+    return flags & ~LeafFlags;
+}
+
+uint CombinePrimitiveFlags(uint flags1, uint flags2)
+{
+    uint combinedLeafFlags = GetLeafFlagsFromPrimitiveFlags(flags1)
+                           | GetLeafFlagsFromPrimitiveFlags(flags2);
+
+    uint combinedPrimitives = GetNumPrimitivesFromPrimitiveFlags(flags1)
+                            + GetNumPrimitivesFromPrimitiveFlags(flags2);
+
+    return combinedLeafFlags | combinedPrimitives;
+}
+
+uint GetAABBNodeAddress(uint startAddress, uint boxIndex)
 {
     return startAddress + boxIndex * SizeOfAABBNode;
 }
 
-BoundingBox RawDataToBoundingBox(int4 a, int4 b, out uint2 flags)
+void CompressBox(BoundingBox box, uint childIndex, uint primitiveFlags, out uint4 data1, out uint4 data2)
+{
+    data1.x = childIndex;
+    data1.y = asuint(box.center.x);
+    data1.z = asuint(box.center.y);
+    data1.w = asuint(box.center.z);
+
+    data2.x = asuint(box.halfDim.x);
+    data2.y = asuint(box.halfDim.y);
+    data2.z = asuint(box.halfDim.z);
+    data2.w = primitiveFlags;
+}
+
+void WriteBoxToBuffer(
+    RWByteAddressBuffer buffer,
+    uint boxAddress,
+    BoundingBox box,
+    uint2 extraInfo)
+{
+    uint4 data1, data2;
+    CompressBox(box, extraInfo.x, extraInfo.y, data1, data2);
+
+    buffer.Store4(boxAddress, data1);
+    buffer.Store4(boxAddress + 16, data2);
+}
+
+void WriteLeftBoxToBuffer(
+    RWByteAddressBuffer buffer, 
+    uint nodeStartOffset, 
+    uint nodeIndex, 
+    BoundingBox box, 
+    uint2 extraInfo)
+{
+    uint boxAddress = GetAABBNodeAddress(nodeStartOffset, nodeIndex);
+    WriteBoxToBuffer(buffer, boxAddress, box, extraInfo);
+}
+
+void WriteRightBoxToBuffer(
+    RWByteAddressBuffer buffer, 
+    uint nodeStartOffset, 
+    uint nodeIndex, 
+    BoundingBox box, 
+    uint2 extraInfo)
+{
+    uint boxAddress = GetAABBNodeAddress(nodeStartOffset, nodeIndex) + SizeOfAABBNodeSibling;
+    WriteBoxToBuffer(buffer, boxAddress, box, extraInfo);
+}
+
+BoundingBox RawDataToBoundingBox(int4 a, int4 b, out uint2 extraInfo)
 {
     BoundingBox box;
-    box.center.x = asfloat(a.x);
-    box.center.y = asfloat(a.y);
-    box.center.z = asfloat(a.z);
+    box.center.x = asfloat(a.y);
+    box.center.y = asfloat(a.z);
+    box.center.z = asfloat(a.w);
     box.halfDim.x = asfloat(b.x);
     box.halfDim.y = asfloat(b.y);
     box.halfDim.z = asfloat(b.z);
-
-    flags = uint2(a.w, b.w);
-
+    extraInfo.x = a.x;
+    extraInfo.y = b.w;
     return box;
 }
 
-BoundingBox GetBoxFromBuffer(RWByteAddressBuffer buffer, uint boxStartOffset, uint boxIndex)
+BoundingBox GetBoxFromBuffer(RWByteAddressBuffer buffer, uint aabbNodeAddress, out uint2 extraInfo)
 {
-    uint boxAddress = GetBoxAddress(boxStartOffset, boxIndex);
+    int4 data1 = buffer.Load4(aabbNodeAddress);
+    int4 data2 = buffer.Load4(aabbNodeAddress + 16);
 
-    int4 data1 = buffer.Load4(boxAddress);
-    int4 data2 = buffer.Load4(boxAddress + 16);
+    return RawDataToBoundingBox(data1, data2, extraInfo);
+}
 
-    uint2 dummyFlag;
-    return RawDataToBoundingBox(data1, data2, dummyFlag);
+BoundingBox GetLeftBoxFromBuffer(
+    RWByteAddressBuffer buffer, 
+    uint nodeStartOffset, 
+    uint parentNodeIndex,
+    out uint2 extraInfo)
+{
+    uint aabbNodeAddress = GetAABBNodeAddress(nodeStartOffset, parentNodeIndex);
+    return GetBoxFromBuffer(buffer, aabbNodeAddress, extraInfo);
+}
+
+BoundingBox GetRightBoxFromBuffer(
+    RWByteAddressBuffer buffer, 
+    uint nodeStartOffset, 
+    uint parentNodeIndex,
+    out uint2 extraInfo)
+{
+    uint aabbNodeAddress = GetAABBNodeAddress(nodeStartOffset, parentNodeIndex) + 32;
+    return GetBoxFromBuffer(buffer, aabbNodeAddress, extraInfo);
+}
+
+BoundingBox GetRightBoxFromBVH(RWByteAddressBufferPointer pointer, int nodeIndex, out uint2 extraInfo)
+{
+    uint boxStartOffset = GetOffsetToAABBNodes(pointer);
+    uint aabbNodeAddress = GetAABBNodeAddress(boxStartOffset, nodeIndex);
+    return GetBoxFromBuffer(pointer.buffer, aabbNodeAddress, extraInfo);
+}
+
+BoundingBox GetLeftBoxFromBVH(RWByteAddressBufferPointer pointer, int nodeIndex, out uint2 extraInfo)
+{
+    uint boxStartOffset = GetOffsetToAABBNodes(pointer);
+    uint aabbNodeAddress = GetAABBNodeAddress(boxStartOffset, nodeIndex) + 32;
+    return GetBoxFromBuffer(pointer.buffer, aabbNodeAddress, extraInfo);
 }
 
 #define GetBVHMetadataAddress(byteAddressBufferPointer, offsetToInstanceDescs, leafIndex) \
@@ -148,28 +238,6 @@ BoundingBox GetBoxFromBuffer(RWByteAddressBuffer buffer, uint boxStartOffset, ui
 
 #define GetBVHMetadataFromLeafIndex(byteAddressBufferPointer, offsetToLeafNodeMetaData, leafIndex) \
     LoadBVHMetadata(byteAddressBufferPointer.buffer, GetBVHMetadataAddress(byteAddressBufferPointer, offsetToLeafNodeMetaData, leafIndex))
-
-BoundingBox BVHReadBoundingBox(RWByteAddressBufferPointer pointer, int nodeIndex, out uint2 flags)
-{
-    const uint boxAddress = GetBoxAddress(GetOffsetToBoxes(pointer), nodeIndex);
-
-    const uint4 a = pointer.buffer.Load4(boxAddress);
-    const uint4 b = pointer.buffer.Load4(boxAddress + 16);
-    return RawDataToBoundingBox(a, b, flags);
-}
-
-void CompressBox(BoundingBox box, uint2 flags, out uint4 data1, out uint4 data2)
-{
-    data1.x = asuint(box.center.x);
-    data1.y = asuint(box.center.y);
-    data1.z = asuint(box.center.z);
-    data1.w = flags.x;
-
-    data2.x = asuint(box.halfDim.x);
-    data2.y = asuint(box.halfDim.y);
-    data2.z = asuint(box.halfDim.z);
-    data2.w = flags.y;
-}
 
 uint GetPrimitiveMetaDataAddress(uint startAddress, uint triangleIndex)
 {
@@ -186,25 +254,6 @@ PrimitiveMetaData BVHReadPrimitiveMetaData(RWByteAddressBufferPointer pointer, i
     metadata.PrimitiveIndex = a.y;
     metadata.GeometryFlags = a.z;
     return metadata;
-}
-
-void WriteOnlyFlagToBuffer(RWByteAddressBuffer buffer, uint boxStartOffset, uint boxIndex, uint2 flags)
-{
-    uint boxAddress = GetBoxAddress(boxStartOffset, boxIndex);
-
-    buffer.Store(boxAddress + 4 * 3, flags.x);
-    buffer.Store(boxAddress + 4 * 7, flags.y);
-}
-
-void WriteBoxToBuffer(RWByteAddressBuffer buffer, uint boxStartOffset, uint boxIndex, BoundingBox box, uint2 flags)
-{
-    uint boxAddress = GetBoxAddress(boxStartOffset, boxIndex);
-
-    uint4 data1, data2;
-    CompressBox(box, flags, data1, data2);
-
-    buffer.Store4(boxAddress, data1);
-    buffer.Store4(boxAddress + 16, data2);
 }
 
 void BVHReadTriangle(
@@ -244,11 +293,11 @@ AABB BoundingBoxToAABB(BoundingBox boundingBox)
 
 AABB RawDataToAABB(int4 a, int4 b)
 {
-    uint2 unusedFlags;
-    return BoundingBoxToAABB(RawDataToBoundingBox(a, b, unusedFlags));
+    uint2 unusedInfo;
+    return BoundingBoxToAABB(RawDataToBoundingBox(a, b, unusedInfo));
 }
 
-BoundingBox GetBoxDataFromTriangle(float3 v0, float3 v1, float3 v2, int triangleIndex, out uint2 flag)
+BoundingBox GetBoxDataFromTriangle(float3 v0, float3 v1, float3 v2, int triangleIndex, out uint2 triangleInfo)
 {
     AABB aabb;
     aabb.min = min(min(v0, v1), v2);
@@ -257,8 +306,8 @@ BoundingBox GetBoxDataFromTriangle(float3 v0, float3 v1, float3 v2, int triangle
     aabb.min = min(aabb.min, aabb.max - AABB_Min_Padding);
 
     BoundingBox box = AABBtoBoundingBox(aabb);
-    flag.x = triangleIndex | IsLeafFlag;
-    flag.y = 1; // NumTriangles
+    triangleInfo.x = triangleIndex;
+    triangleInfo.y = IsLeafFlag | MinNumberOfPrimitives;
     return box;
 }
 
@@ -272,16 +321,18 @@ float3 GetMaxCorner(BoundingBox box)
     return box.center + box.halfDim;
 }
 
-BoundingBox GetBoxFromChildBoxes(BoundingBox boxA, int leftBoxIndex, BoundingBox boxB, int rightBoxIndex, out uint2 flag)
+AABB GetAABBFromChildBoxes(BoundingBox boxA, BoundingBox boxB)
 {
     AABB aabb;
     aabb.min = min(GetMinCorner(boxA), GetMinCorner(boxB));
     aabb.max = max(GetMaxCorner(boxA), GetMaxCorner(boxB));
 
-    BoundingBox box = AABBtoBoundingBox(aabb);
-    flag = CreateFlag(leftBoxIndex, rightBoxIndex);
+    return aabb;
+}
 
-    return box;
+BoundingBox GetBoxFromChildBoxes(BoundingBox boxA, BoundingBox boxB)
+{
+    return AABBtoBoundingBox(GetAABBFromChildBoxes(boxA, boxB));
 }
 
 float Determinant(in AffineMatrix transform)
@@ -356,4 +407,5 @@ void GetAnyHitAndIntersectionStateId(ByteAddressBuffer shaderTable, uint recordO
     AnyHitStateId = stateIds.x;
     IntersectionStateId = stateIds.y;
 }
+
 #endif // RAYTACING_HELPER_H_INCLUDED

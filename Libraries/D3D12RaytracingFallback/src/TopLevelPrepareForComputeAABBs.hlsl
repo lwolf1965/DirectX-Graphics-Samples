@@ -43,7 +43,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
             boxData.center = 0;
             boxData.halfDim = 0;
             uint2 flags = 0;
-            WriteBoxToBuffer(outputBVH, offsetToBoxes, 0, boxData, flags);
+            WriteLeftBoxToBuffer(outputBVH, offsetToBoxes, 0, boxData, flags);
+            WriteRightBoxToBuffer(outputBVH, offsetToBoxes, 0, boxData, flags);
             return;
         }
     }

@@ -14,6 +14,170 @@ static const uint rootNodeIndex = 0;
 static const int offsetToBoxes = SizeOfBVHOffsets;
 static const int MaxLeavesPerNode = 4;
 
+uint GetLeftChildIndex(uint nodeIndex) 
+{
+    if (ShouldPerformUpdate)
+    {
+        uint2 extraInfo;
+        GetLeftBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, extraInfo);
+        return extraInfo.x;
+    }
+
+    return hierarchyBuffer[nodeIndex].LeftChildIndex;
+}
+
+uint GetRightChildIndex(uint nodeIndex) 
+{
+    if (ShouldPerformUpdate)
+    {
+        uint2 extraInfo;
+        GetRightBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, extraInfo);
+        return extraInfo.x;
+    }
+
+    return hierarchyBuffer[nodeIndex].RightChildIndex;
+}
+
+uint GetParentIndex(uint nodeIndex) 
+{
+    if (ShouldPerformUpdate)
+    {
+        return aabbParentBuffer[nodeIndex];
+    }
+
+    return hierarchyBuffer[nodeIndex].ParentIndex;
+}
+
+void CacheParentIndex(uint nodeIndex)
+{
+    aabbParentBuffer[GetLeftChildIndex(nodeIndex)] = nodeIndex;
+    aabbParentBuffer[GetRightChildIndex(nodeIndex)] = nodeIndex;
+}
+
+BoundingBox BuildLeafBox(uint nodeIndex, uint offsetToPrimitives, uint NumberOfInternalNodes, out uint2 extraInfo)
+{
+    uint leafIndex = nodeIndex - NumberOfInternalNodes;
+    return ComputeLeafAABB(leafIndex, offsetToPrimitives, extraInfo);    
+}
+
+BoundingBox BuildCombinedBox(uint nodeIndex, out uint2 extraInfo)
+{
+    uint2 leftExtraInfo;
+    BoundingBox leftBox = GetLeftBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, leftExtraInfo);
+    uint2 rightExtraInfo;
+    BoundingBox rightBox = GetRightBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, rightExtraInfo);
+
+    extraInfo.x = nodeIndex;
+    extraInfo.y = CombinePrimitiveFlags(leftExtraInfo.y, rightExtraInfo.y);
+
+    return GetBoxFromChildBoxes(leftBox, rightBox);
+}
+
+BoundingBox BuildChildBox(uint nodeIndex, uint offsetToPrimitives, uint NumberOfInternalNodes, out uint2 extraInfo)
+{
+    bool isLeaf = nodeIndex >= NumberOfInternalNodes;
+
+    if (isLeaf)
+    {
+        return BuildLeafBox(nodeIndex, offsetToPrimitives, NumberOfInternalNodes, extraInfo);
+    }
+    else
+    {
+        return BuildCombinedBox(nodeIndex, extraInfo);
+    }
+}
+
+void BuildBoxFromChildren(uint nodeIndex, uint offsetToPrimitives, uint NumberOfInternalNodes, bool swapChildIndices) 
+{
+    uint leftChildIndex = GetLeftChildIndex(nodeIndex);
+    uint rightChildIndex = GetRightChildIndex(nodeIndex);
+
+    // Prioritize having the smaller nodes on the left
+    // TODO: Investigate better heuristics for node ordering
+    if (swapChildIndices)
+    {
+        uint temp = leftChildIndex;
+        leftChildIndex = rightChildIndex;
+        rightChildIndex = temp;
+    }
+
+    uint2 leftExtraInfo;
+    BoundingBox leftBox = BuildChildBox(leftChildIndex, offsetToPrimitives, NumberOfInternalNodes, leftExtraInfo);
+    uint2 rightExtraInfo;
+    BoundingBox rightBox = BuildChildBox(rightChildIndex, offsetToPrimitives, NumberOfInternalNodes, rightExtraInfo);
+
+    uint leftSize = GetNumPrimitivesFromPrimitiveFlags(leftExtraInfo.y);
+    uint rightSize = GetNumPrimitivesFromPrimitiveFlags(rightExtraInfo.y);
+
+    WriteLeftBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, leftBox, leftExtraInfo);
+    WriteRightBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, rightBox, rightExtraInfo);
+}
+
+[numthreads(THREAD_GROUP_1D_WIDTH, 1, 1)]
+void main(uint3 DTid : SV_DispatchThreadID)
+{
+    uint NumberOfInternalNodes = GetNumInternalNodes(Constants.NumberOfElements);
+    uint NumberOfAABBs = NumberOfInternalNodes + Constants.NumberOfElements;
+
+    if (DTid.x >= Constants.NumberOfElements)
+    {
+        return;
+    }
+    
+    uint threadScratchAddress = DTid.x * SizeOfUINT32;
+    uint nodeIndex = scratchMemory.Load(threadScratchAddress);
+
+    if (nodeIndex >= NumberOfAABBs) 
+    {
+        return; 
+    }
+
+    uint parentNodeIndex = GetParentIndex(nodeIndex);
+
+    uint offsetToPrimitives = outputBVH.Load(OffsetToPrimitivesOffset);
+
+    uint numTriangles = 1;
+    bool swapChildIndices = false;
+
+    do
+    {
+        BoundingBox boxData;
+        uint2 extraInfo;
+
+        bool isLeaf = nodeIndex >= NumberOfInternalNodes;
+
+        if (!isLeaf)
+        {
+            BuildBoxFromChildren(nodeIndex, offsetToPrimitives, NumberOfInternalNodes, swapChildIndices);
+        }
+        
+        if (nodeIndex == rootNodeIndex)
+        {
+            return;
+        }
+
+        uint siblingTriangles;
+        childNodesProcessedCounter.InterlockedAdd(parentNodeIndex * SizeOfUINT32, numTriangles, siblingTriangles);
+        if (siblingTriangles == 0) // Need both children loaded to process parent
+        {
+            return;
+        }
+
+        bool IsLeft = GetLeftChildIndex(nodeIndex) == nodeIndex;
+        bool IsOtherSideSmaller = numTriangles > siblingTriangles;
+        swapChildIndices = IsLeft ? IsOtherSideSmaller : !IsOtherSideSmaller;
+        
+        nodeIndex = parentNodeIndex;
+        numTriangles += siblingTriangles;
+
+        if (ShouldPrepareUpdate)
+        {
+            CacheParentIndex(nodeIndex);
+        }
+    } while (true);   
+}
+
+/*
 uint GetLeafCount(uint boxIndex)
 {
     uint nodeAddress = GetBoxAddress(offsetToBoxes, boxIndex);
@@ -36,85 +200,6 @@ uint2 GetNodeFlags(uint boxIndex)
     return flags;
 }
 
-uint GetLeftChildIndex(uint boxIndex) 
-{
-    if (ShouldPerformUpdate)
-    {
-        return GetLeftNodeIndex(GetNodeFlags(boxIndex));
-    }
-
-    return hierarchyBuffer[boxIndex].LeftChildIndex;
-}
-
-uint GetRightChildIndex(uint boxIndex) 
-{
-    if (ShouldPerformUpdate)
-    {
-        return GetRightNodeIndex(GetNodeFlags(boxIndex));
-    }
-
-    return hierarchyBuffer[boxIndex].RightChildIndex;
-}
-
-uint GetParentIndex(uint boxIndex) 
-{
-    if (ShouldPerformUpdate)
-    {
-        return aabbParentBuffer[boxIndex];
-    }
-
-    return hierarchyBuffer[boxIndex].ParentIndex;
-}
-
-[numthreads(THREAD_GROUP_1D_WIDTH, 1, 1)]
-void main(uint3 DTid : SV_DispatchThreadID)
-{
-    int NumberOfInternalNodes = GetNumInternalNodes(Constants.NumberOfElements);
-    int NumberOfAABBs = NumberOfInternalNodes + Constants.NumberOfElements;
-
-    if (DTid.x >= Constants.NumberOfElements)
-    {
-        return;
-    }
-    
-    uint threadScratchAddress = DTid.x * SizeOfUINT32;
-    uint nodeIndex = scratchMemory.Load(threadScratchAddress);
-    if (nodeIndex == InvalidNodeIndex) { return; }
-
-    int offsetToPrimitives = outputBVH.Load(OffsetToPrimitivesOffset);
-
-    uint dummyFlag;
-    uint nodeAddress = GetBoxAddress(offsetToBoxes, nodeIndex);
-    if (nodeIndex >= NumberOfAABBs) return;
-
-    uint numTriangles = 1;
-    bool swapChildIndices = false;
-    while (true)
-    {
-        BoundingBox boxData;
-        uint2 outputFlag;
-        bool isLeaf = nodeIndex >= NumberOfInternalNodes;
-        if (isLeaf)
-        {
-            uint leafIndex = nodeIndex - NumberOfInternalNodes;
-            boxData = ComputeLeafAABB(leafIndex, offsetToPrimitives, outputFlag);
-        }
-        else
-        {
-            uint leftNodeIndex = GetLeftChildIndex(nodeIndex);
-            uint rightNodeIndex = GetRightChildIndex(nodeIndex);
-            if (swapChildIndices)
-            {
-                uint temp = leftNodeIndex;
-                leftNodeIndex = rightNodeIndex;
-                rightNodeIndex = temp;
-            }
-
-            BoundingBox leftBox = GetBoxFromBuffer(outputBVH, offsetToBoxes, leftNodeIndex);
-            BoundingBox rightBox = GetBoxFromBuffer(outputBVH, offsetToBoxes, rightNodeIndex);
-
-            boxData = GetBoxFromChildBoxes(leftBox, leftNodeIndex, rightBox, rightNodeIndex, outputFlag);
-
 #if COMBINE_LEAF_NODES
             uint2 leftFlags;
             uint4 leftData = GetNodeData(leftNodeIndex, leftFlags);
@@ -133,40 +218,4 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 }
             }
 #endif
-        }
-
-        WriteBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, boxData, outputFlag);
-
-        if (nodeIndex == rootNodeIndex)
-        {
-            break;
-        }
-
-        uint parentNodeIndex = GetParentIndex(nodeIndex);
-        uint trianglesFromOtherChild;
-        // If this counter was already incremented, that means both children for the parent 
-        // node have computed their AABB, and the parent is ready to be processed
-        childNodesProcessedCounter.InterlockedAdd(parentNodeIndex * SizeOfUINT32, numTriangles, trianglesFromOtherChild);
-        if (trianglesFromOtherChild != 0)
-        {
-            // Prioritize having the smaller nodes on the left
-            // TODO: Investigate better heuristics for node ordering
-            bool IsLeft = GetLeftChildIndex(parentNodeIndex) == nodeIndex;
-            bool IsOtherSideSmaller = numTriangles > trianglesFromOtherChild;
-            swapChildIndices = IsLeft ? IsOtherSideSmaller : !IsOtherSideSmaller;
-            nodeIndex = parentNodeIndex;
-            numTriangles += trianglesFromOtherChild;
-
-            if (ShouldPrepareUpdate)
-            {
-                aabbParentBuffer[GetLeftChildIndex(nodeIndex)] = nodeIndex;
-                aabbParentBuffer[GetRightChildIndex(nodeIndex)] = nodeIndex;
-            }
-        }
-        else
-        {
-            break;
-        }
-    }
-    
-}
+*/

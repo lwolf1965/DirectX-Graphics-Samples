@@ -66,7 +66,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     uint outputIndex = GetOutputIndex(instanceIndex);
 
-    uint totalSizeOfAABBNodes = Constants.NumberOfElements * SizeOfAABBNode;
+    uint totalSizeOfAABBNodes = (Constants.NumberOfElements / 2) * SizeOfAABBNode;
     const uint offsetToLeafNodeMetadata = totalSizeOfAABBNodes;
 
     RaytracingInstanceDesc instanceDesc = GetInstanceDesc(instanceIndex);

@@ -389,7 +389,7 @@ namespace FallbackLayer
 
         const UINT sizePerElement = level == Level::Bottom ?
             sizeof(Primitive) + sizeof(PrimitiveMetaData) :
-            (sizeof(AABBNode) + sizeof(BVHMetadata));
+            (sizeof(AABBNode) / 2 + sizeof(BVHMetadata));
         scratchMemoryPartitions.OffsetToElements = totalSize;
         totalSize += ALIGN_GPU_VA_OFFSET(sizePerElement * numPrimitives);
 
@@ -456,7 +456,7 @@ namespace FallbackLayer
             numLeaves = GetTotalPrimitiveCount(*pDesc);
             totalNumNodes = numLeaves + GetNumberOfInternalNodes(numLeaves);
 
-            pInfo->ResultDataMaxSizeInBytes = sizeof(BVHOffsets) + numLeaves * (sizeof(Primitive) + sizeof(PrimitiveMetaData)) + totalNumNodes * sizeof(AABBNode);
+            pInfo->ResultDataMaxSizeInBytes = sizeof(BVHOffsets) + numLeaves * (sizeof(Primitive) + sizeof(PrimitiveMetaData)) + (totalNumNodes / 2) * sizeof(AABBNode);
         }
         break;
         case D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL:
@@ -465,7 +465,7 @@ namespace FallbackLayer
             numLeaves = NumElements;
             totalNumNodes = numLeaves + GetNumberOfInternalNodes(numLeaves);
 
-            pInfo->ResultDataMaxSizeInBytes = sizeof(BVHOffsets) + sizeof(AABBNode) * totalNumNodes + sizeof(BVHMetadata) * numLeaves;
+            pInfo->ResultDataMaxSizeInBytes = sizeof(BVHOffsets) + sizeof(AABBNode) * (totalNumNodes / 2) + sizeof(BVHMetadata) * numLeaves;
         }
         break;
         default:
