@@ -18,9 +18,9 @@ uint GetLeftChildIndex(uint nodeIndex)
 {
     if (ShouldPerformUpdate)
     {
-        uint2 extraInfo;
-        GetLeftBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, extraInfo);
-        return extraInfo.x;
+        uint2 boxInfo;
+        GetLeftBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, boxInfo);
+        return GetChildIndexFromInfo(boxInfo);
     }
 
     return hierarchyBuffer[nodeIndex].LeftChildIndex;
@@ -30,9 +30,9 @@ uint GetRightChildIndex(uint nodeIndex)
 {
     if (ShouldPerformUpdate)
     {
-        uint2 extraInfo;
-        GetRightBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, extraInfo);
-        return extraInfo.x;
+        uint2 boxInfo;
+        GetRightBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, boxInfo);
+        return GetChildIndexFromInfo(boxInfo);
     }
 
     return hierarchyBuffer[nodeIndex].RightChildIndex;
@@ -54,36 +54,36 @@ void CacheParentIndex(uint nodeIndex)
     aabbParentBuffer[GetRightChildIndex(nodeIndex)] = nodeIndex;
 }
 
-BoundingBox BuildLeafBox(uint nodeIndex, uint offsetToPrimitives, uint NumberOfInternalNodes, out uint2 extraInfo)
+BoundingBox BuildLeafBox(uint nodeIndex, uint offsetToPrimitives, uint NumberOfInternalNodes, out uint2 boxInfo)
 {
     uint leafIndex = nodeIndex - NumberOfInternalNodes;
-    return ComputeLeafAABB(leafIndex, offsetToPrimitives, extraInfo);    
+    return ComputeLeafAABB(leafIndex, offsetToPrimitives, boxInfo);    
 }
 
-BoundingBox BuildCombinedBox(uint nodeIndex, out uint2 extraInfo)
+BoundingBox BuildCombinedBox(uint nodeIndex, out uint2 boxInfo)
 {
-    uint2 leftExtraInfo;
-    BoundingBox leftBox = GetLeftBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, leftExtraInfo);
-    uint2 rightExtraInfo;
-    BoundingBox rightBox = GetRightBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, rightExtraInfo);
+    uint2 leftBoxInfo;
+    BoundingBox leftBox = GetLeftBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, leftBoxInfo);
+    uint2 rightBoxInfo;
+    BoundingBox rightBox = GetRightBoxFromBuffer(outputBVH, offsetToBoxes, nodeIndex, rightBoxInfo);
 
-    extraInfo.x = nodeIndex;
-    extraInfo.y = CombinePrimitiveFlags(leftExtraInfo.y, rightExtraInfo.y);
+    boxInfo.x = nodeIndex;
+    boxInfo.y = CombinePrimitiveFlags(leftBoxInfo.y, rightBoxInfo.y);
 
     return GetBoxFromChildBoxes(leftBox, rightBox);
 }
 
-BoundingBox BuildChildBox(uint nodeIndex, uint offsetToPrimitives, uint NumberOfInternalNodes, out uint2 extraInfo)
+BoundingBox BuildChildBox(uint nodeIndex, uint offsetToPrimitives, uint NumberOfInternalNodes, out uint2 boxInfo)
 {
     bool isLeaf = nodeIndex >= NumberOfInternalNodes;
 
     if (isLeaf)
     {
-        return BuildLeafBox(nodeIndex, offsetToPrimitives, NumberOfInternalNodes, extraInfo);
+        return BuildLeafBox(nodeIndex, offsetToPrimitives, NumberOfInternalNodes, boxInfo);
     }
     else
     {
-        return BuildCombinedBox(nodeIndex, extraInfo);
+        return BuildCombinedBox(nodeIndex, boxInfo);
     }
 }
 
@@ -101,16 +101,14 @@ void BuildBoxFromChildren(uint nodeIndex, uint offsetToPrimitives, uint NumberOf
         rightChildIndex = temp;
     }
 
-    uint2 leftExtraInfo;
-    BoundingBox leftBox = BuildChildBox(leftChildIndex, offsetToPrimitives, NumberOfInternalNodes, leftExtraInfo);
-    uint2 rightExtraInfo;
-    BoundingBox rightBox = BuildChildBox(rightChildIndex, offsetToPrimitives, NumberOfInternalNodes, rightExtraInfo);
+    BoundingBox leftBox, rightBox;
+    uint2 leftBoxInfo, rightBoxInfo;
 
-    uint leftSize = GetNumPrimitivesFromPrimitiveFlags(leftExtraInfo.y);
-    uint rightSize = GetNumPrimitivesFromPrimitiveFlags(rightExtraInfo.y);
+    leftBox = BuildChildBox(leftChildIndex, offsetToPrimitives, NumberOfInternalNodes, leftBoxInfo);
+    rightBox = BuildChildBox(rightChildIndex, offsetToPrimitives, NumberOfInternalNodes, rightBoxInfo);
 
-    WriteLeftBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, leftBox, leftExtraInfo);
-    WriteRightBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, rightBox, rightExtraInfo);
+    WriteLeftBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, leftBox, leftBoxInfo);
+    WriteRightBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, rightBox, rightBoxInfo);
 }
 
 [numthreads(THREAD_GROUP_1D_WIDTH, 1, 1)]
@@ -141,9 +139,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     do
     {
-        BoundingBox boxData;
-        uint2 extraInfo;
-
         bool isLeaf = nodeIndex >= NumberOfInternalNodes;
 
         if (!isLeaf)
@@ -163,9 +158,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
             return;
         }
 
-        bool IsLeft = GetLeftChildIndex(nodeIndex) == nodeIndex;
-        bool IsOtherSideSmaller = numTriangles > siblingTriangles;
-        swapChildIndices = IsLeft ? IsOtherSideSmaller : !IsOtherSideSmaller;
+        bool isLeft = GetLeftChildIndex(parentNodeIndex) == nodeIndex;
+        bool areSidesEven = numTriangles == siblingTriangles;
+        bool isThisSideSmaller = numTriangles < siblingTriangles;
+        swapChildIndices = (!areSidesEven) && (isLeft == isThisSideSmaller);
         
         nodeIndex = parentNodeIndex;
         numTriangles += siblingTriangles;

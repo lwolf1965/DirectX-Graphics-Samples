@@ -13,7 +13,7 @@
 #include "RayTracingHelper.hlsli"
 #include "EmulatedPointerIntrinsics.hlsli"
 
-BoundingBox ComputeLeafAABB(uint leafIndex, uint unused, out uint2 unused2)
+BoundingBox ComputeLeafAABB(uint leafIndex, uint unused, out uint2 boxInfo)
 {
     RWByteAddressBufferPointer topLevelAccelerationStructure = CreateRWByteAddressBufferPointer(outputBVH, 0);
     
@@ -24,10 +24,13 @@ BoundingBox ComputeLeafAABB(uint leafIndex, uint unused, out uint2 unused2)
     RWByteAddressBufferPointer bottomLevelAccelerationStructure = CreateRWByteAddressBufferPointerFromGpuVA(metadata.instanceDesc.AccelerationStructure);
 
     // Combine top two from bottom-level AABB
-    uint2 unusedFlag;
-    BoundingBox leftRootBox = GetLeftBoxFromBVH(bottomLevelAccelerationStructure, 0, unusedFlag);
-    BoundingBox rightRootBox = GetRightBoxFromBVH(bottomLevelAccelerationStructure, 0, unusedFlag);
+    uint2 leftRootBoxInfo, rightRootBoxInfo;
+    BoundingBox leftRootBox = GetLeftBoxFromBVH(bottomLevelAccelerationStructure, 0, leftRootBoxInfo);
+    BoundingBox rightRootBox = GetRightBoxFromBVH(bottomLevelAccelerationStructure, 0, rightRootBoxInfo);
     
+    boxInfo.x = leafIndex;
+    boxInfo.y = IsLeafFlag;
+
     AABB box = GetAABBFromChildBoxes(leftRootBox, rightRootBox);
     AffineMatrix ObjectToWorld = CreateMatrix(metadata.ObjectToWorld);
 

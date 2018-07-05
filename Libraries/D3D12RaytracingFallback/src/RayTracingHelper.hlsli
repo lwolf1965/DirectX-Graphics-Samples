@@ -98,11 +98,6 @@ uint GetChildIndexFromInfo(uint2 info)
     return info.x;
 }
 
-uint GetNumPrimitivesFromInfo(uint2 info)
-{
-    return GetNumPrimitivesFromPrimitiveFlags(info.y);
-}
-
 uint GetLeafFlagsFromPrimitiveFlags(uint flags)
 {
     return flags & LeafFlags;
@@ -111,6 +106,11 @@ uint GetLeafFlagsFromPrimitiveFlags(uint flags)
 uint GetNumPrimitivesFromPrimitiveFlags(uint flags)
 {
     return flags & ~LeafFlags;
+}
+
+uint GetNumPrimitivesFromInfo(uint2 info)
+{
+    return GetNumPrimitivesFromPrimitiveFlags(info.y);
 }
 
 uint CombinePrimitiveFlags(uint flags1, uint flags2)

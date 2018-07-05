@@ -350,7 +350,7 @@ struct AABBNodeSibling
     {
         uint    childNodeIndex;
         uint    firstPrimitiveId;
-    }
+    };
 #endif
 
     float   center[3];
@@ -406,7 +406,7 @@ uint GetOffsetFromSortedIndicesToAABBParents(uint numPrimitives) {
 inline
 uint GetOffsetToBVHSortedIndices(uint numElements) {
     uint totalNodes = numElements + GetNumInternalNodes(numElements);
-    return SizeOfBVHOffsets + SizeOfAABBNode * (totalNodes / 2) + SizeOfBVHMetadata * numElements;
+    return SizeOfBVHOffsets + SizeOfAABBNodeSibling * totalNodes + SizeOfBVHMetadata * numElements;
 }
 
 inline
@@ -425,21 +425,21 @@ inline
 uint GetOffsetToLeafNodeAABBs(uint numElements)
 {
     uint numInternalLeafNodes = GetNumInternalNodes(numElements);
-    return SizeOfBVHOffsets + SizeOfAABBNode * (numInternalLeafNodes / 2);
-    return SizeOfBVHOffsets + SizeOfAABBNode * (numInternalLeafNodes / 2);
+    return SizeOfBVHOffsets + SizeOfAABBNodeSibling * numInternalLeafNodes;
+    return SizeOfBVHOffsets + SizeOfAABBNodeSibling * numInternalLeafNodes;
 }
 
 inline
 uint GetOffsetToPrimitives(uint numTriangles)
 {
     uint numAABBs = numTriangles + GetNumInternalNodes(numTriangles);
-    return SizeOfBVHOffsets + SizeOfAABBNode * (numAABBs / 2);
+    return SizeOfBVHOffsets + SizeOfAABBNodeSibling * numAABBs;
 }
 
 inline
 uint GetOffsetFromLeafNodesToBottomLevelMetadata(uint numElements)
 {
-    return SizeOfAABBNode * (numElements / 2);
+    return SizeOfAABBNodeSibling * numElements;
 }
 
 #ifndef HLSL

@@ -61,6 +61,7 @@ namespace FallbackLayer
         const BYTE *pOutputCpuData,
         std::wstring &errorMessage)
     {
+/*
 #define ThrowError(msg) errorMessage = msg; throw false;
 #define ThrowErrorIfFalse(exp, msg) if(!(exp)) {ThrowError(msg);}
 
@@ -176,6 +177,7 @@ namespace FallbackLayer
         {
             return false;
         }
+*/
         return true;
     }
 
@@ -331,7 +333,7 @@ namespace FallbackLayer
         AABB& box,
         const AABBNode& packedBox)
     {
-        if (packedBox.leftNodeIndex == 0)
+        if (packedBox.left.childNodeIndex == 0)
         {
             box.min.x = packedBox.left.center[0] - packedBox.left.halfDim[0];
             box.min.y = packedBox.left.center[1] - packedBox.left.halfDim[1];
