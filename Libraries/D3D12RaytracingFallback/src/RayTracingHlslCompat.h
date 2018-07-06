@@ -359,9 +359,12 @@ struct AABBNodeSibling
 #ifdef HLSL
     uint    primitiveFlags;
 #else
-    uint    numPrimitives : 30;
-    uint    isProcedural : 1;
-    uint    isLeaf : 1;
+    struct 
+    {
+        uint    numPrimitives : 30;
+        uint    isProcedural : 1;
+        uint    isLeaf : 1;
+    };
 #endif
 };
 #define SizeOfAABBNodeSibling (4 * 8)
