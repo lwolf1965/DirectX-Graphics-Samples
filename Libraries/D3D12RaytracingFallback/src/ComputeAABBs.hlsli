@@ -111,6 +111,18 @@ void BuildBoxFromChildren(uint nodeIndex, uint offsetToPrimitives, uint NumberOf
     WriteRightBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, rightBox, rightBoxInfo);
 }
 
+void BuildRootBoxWithDummy(uint nodeIndex, uint offsetToPrimitives, uint NumberOfInternalNodes)
+{
+    BoundingBox leafBox, dummyBox;
+    uint2 leafBoxInfo, dummyBoxInfo;
+
+    leafBox = BuildLeafBox(0, offsetToPrimitives, NumberOfInternalNodes, leafBoxInfo);
+    dummyBox = CreateDummyBox(dummyBoxInfo);
+
+    WriteLeftBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, leafBox, leafBoxInfo);
+    WriteRightBoxToBuffer(outputBVH, offsetToBoxes, nodeIndex, leafBox, dummyBoxInfo);
+}
+
 [numthreads(THREAD_GROUP_1D_WIDTH, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
@@ -130,8 +142,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
         return; 
     }
 
-    uint parentNodeIndex = GetParentIndex(nodeIndex);
-
     uint offsetToPrimitives = outputBVH.Load(OffsetToPrimitivesOffset);
 
     uint numTriangles = 1;
@@ -139,18 +149,28 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     do
     {
-        bool isLeaf = nodeIndex >= NumberOfInternalNodes;
+        bool hasChildren = nodeIndex < NumberOfInternalNodes;
 
-        if (!isLeaf)
+        if (hasChildren)
         {
             BuildBoxFromChildren(nodeIndex, offsetToPrimitives, NumberOfInternalNodes, swapChildIndices);
+
+            if (ShouldPrepareUpdate)
+            {
+                CacheParentIndex(nodeIndex);
+            }
+        } 
+        else if (nodeIndex == rootNodeIndex)
+        {
+            BuildRootBoxWithDummy(nodeIndex, offsetToPrimitives, NumberOfInternalNodes);
         }
-        
+
         if (nodeIndex == rootNodeIndex)
         {
             return;
         }
 
+        uint parentNodeIndex = GetParentIndex(nodeIndex);
         uint siblingTriangles;
         childNodesProcessedCounter.InterlockedAdd(parentNodeIndex * SizeOfUINT32, numTriangles, siblingTriangles);
         if (siblingTriangles == 0) // Need both children loaded to process parent
@@ -165,11 +185,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
         
         nodeIndex = parentNodeIndex;
         numTriangles += siblingTriangles;
-
-        if (ShouldPrepareUpdate)
-        {
-            CacheParentIndex(nodeIndex);
-        }
     } while (true);   
 }
 

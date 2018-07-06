@@ -61,7 +61,6 @@ namespace FallbackLayer
         const BYTE *pOutputCpuData,
         std::wstring &errorMessage)
     {
-/*
 #define ThrowError(msg) errorMessage = msg; throw false;
 #define ThrowErrorIfFalse(exp, msg) if(!(exp)) {ThrowError(msg);}
 
@@ -98,8 +97,6 @@ namespace FallbackLayer
                 AABB parentAABB;
                 FallbackLayer::DecompressAABB(parentAABB, *pCompressedNode);
 
-                const bool bIsLeaf = pCompressedNode->leftNodeIndex == 0;
-
                 for (auto &pLeaf : pExpectedLeafNodes)
                 {
                     if (pLeaf->IsContainedByBox(parentAABB))
@@ -108,50 +105,51 @@ namespace FallbackLayer
                     }
                 }
 
-                if (!bIsLeaf)
+                AABBNodeSibling siblings[2];
+                siblings[0] = pCompressedNode->left;
+                siblings[1] = pCompressedNode->right;
+
+                for (UINT i = 0; i < 2; i++)
                 {
+                    AABBNodeSibling sibling = siblings[i];
+                    
+                    if (sibling.isDummy)
                     {
-                        ThrowErrorIfFalse(IsChildNodeIndexValid(pCompressedNode->leftNodeIndex), L"Circular referance to root node");
-                        AABBNode *pLeftNode = &pNodeArray[pCompressedNode->leftNodeIndex];
-                        AABB leftAABB;
-                        FallbackLayer::DecompressAABB(leftAABB, *pLeftNode);
-                        ThrowErrorIfFalse(IsChildContainedByParent(parentAABB, leftAABB), L"AABB not contained by parent");
-
-                        nodeQueue.push_back(pLeftNode);
+                        continue;
                     }
-
+                    
+                    if (!sibling.isLeaf)
                     {
-                        UINT rightNodeIndex = pCompressedNode->rightNodeIndex;
-      
-                        ThrowErrorIfFalse(IsChildNodeIndexValid(rightNodeIndex), L"Circular referance to root node");
-                        AABBNode *pRightNode = &pNodeArray[rightNodeIndex];
-                        AABB rightAABB;
-                        FallbackLayer::DecompressAABB(rightAABB, *pRightNode);
-                        ThrowErrorIfFalse(IsChildContainedByParent(parentAABB, rightAABB), L"AABB not contained by parent");
+                        UINT childIndex = sibling.childNodeIndex;
+                        ThrowErrorIfFalse(IsChildNodeIndexValid(childIndex), L"Circular referance to root node");
 
-                        nodeQueue.push_back(pRightNode);
+                        AABBNode *pChildNode = &pNodeArray[childIndex];
+                        AABB childAABB;
+                        FallbackLayer::DecompressAABB(childAABB, *pChildNode);
+                        ThrowErrorIfFalse(IsChildContainedByParent(parentAABB, childAABB), L"AABB not contained by parent");
+
+                        nodeQueue.push_back(pChildNode);
                     }
-                }
-                else
-                {
-                    // TODO: Hacky way to use the same code path for both bottom and top level
-                    // BVHs. Doing the triangle calculations for both paths, should 
-                    UINT firstTriangleId = pCompressedNode->firstTriangleId;
-                    UINT numTriangles = pCompressedNode->numTriangles;
-                    ThrowErrorIfFalse(numTriangles > 0, L"Invalid value for numTriangles");
-
-                    for (UINT triangleId = firstTriangleId; triangleId < firstTriangleId + numTriangles; triangleId++)
+                    else
                     {
-                        Primitive *pTriangle = &pPrimitiveArray[triangleId];
-                        for (int j = (int)pExpectedLeafNodes.size() - 1; j >= 0; j--)
+                        // TODO: Hacky way to use the same code path for both bottom and top level
+                        // BVHs. Doing the triangle calculations for both paths, should 
+                        UINT firstPrimitiveId = sibling.firstPrimitiveId;
+                        UINT numPrimitives = sibling.numPrimitives;
+                        ThrowErrorIfFalse(numPrimitives > 0, L"Invalid value for numTriangles");
+
+                        for (UINT primitiveId = firstPrimitiveId; primitiveId < firstPrimitiveId + numPrimitives; primitiveId++)
                         {
-                            if (pExpectedLeafNodes[j]->IsLeafEqual((void *)pTriangle, parentAABB))
+                            Primitive *pPrimitive = &pPrimitiveArray[primitiveId];
+                            for (int j = (int)pExpectedLeafNodes.size() - 1; j >= 0; j--)
                             {
-                                pExpectedLeafNodes.erase(pExpectedLeafNodes.begin() + j);
+                                if (pExpectedLeafNodes[j]->IsLeafEqual((void *)pPrimitive, parentAABB))
+                                {
+                                    pExpectedLeafNodes.erase(pExpectedLeafNodes.begin() + j);
+                                }
                             }
                         }
                     }
-
                 }
 
                 // If a whole level has been traversed, verify
@@ -177,7 +175,6 @@ namespace FallbackLayer
         {
             return false;
         }
-*/
         return true;
     }
 
@@ -333,39 +330,27 @@ namespace FallbackLayer
         AABB& box,
         const AABBNode& packedBox)
     {
-        if (packedBox.left.childNodeIndex == 0)
-        {
-            box.min.x = packedBox.left.center[0] - packedBox.left.halfDim[0];
-            box.min.y = packedBox.left.center[1] - packedBox.left.halfDim[1];
-            box.min.z = packedBox.left.center[2] - packedBox.left.halfDim[2];
-            box.max.x = packedBox.left.center[0] + packedBox.left.halfDim[0];
-            box.max.y = packedBox.left.center[1] + packedBox.left.halfDim[1];
-            box.max.z = packedBox.left.center[2] + packedBox.left.halfDim[2];
-        }
-        else
-        {
-            AABB leftBox;
-            leftBox.min.x = packedBox.left.center[0] - packedBox.left.halfDim[0];
-            leftBox.min.y = packedBox.left.center[1] - packedBox.left.halfDim[1];
-            leftBox.min.z = packedBox.left.center[2] - packedBox.left.halfDim[2];
-            leftBox.max.x = packedBox.left.center[0] + packedBox.left.halfDim[0];
-            leftBox.max.y = packedBox.left.center[1] + packedBox.left.halfDim[1];
-            leftBox.max.z = packedBox.left.center[2] + packedBox.left.halfDim[2];
+        AABB leftBox;
+        leftBox.min.x = packedBox.left.center[0] - packedBox.left.halfDim[0];
+        leftBox.min.y = packedBox.left.center[1] - packedBox.left.halfDim[1];
+        leftBox.min.z = packedBox.left.center[2] - packedBox.left.halfDim[2];
+        leftBox.max.x = packedBox.left.center[0] + packedBox.left.halfDim[0];
+        leftBox.max.y = packedBox.left.center[1] + packedBox.left.halfDim[1];
+        leftBox.max.z = packedBox.left.center[2] + packedBox.left.halfDim[2];
 
-            AABB rightBox;
-            rightBox.min.x = packedBox.right.center[0] - packedBox.right.halfDim[0];
-            rightBox.min.y = packedBox.right.center[1] - packedBox.right.halfDim[1];
-            rightBox.min.z = packedBox.right.center[2] - packedBox.right.halfDim[2];
-            rightBox.max.x = packedBox.right.center[0] + packedBox.right.halfDim[0];
-            rightBox.max.y = packedBox.right.center[1] + packedBox.right.halfDim[1];
-            rightBox.max.z = packedBox.right.center[2] + packedBox.right.halfDim[2];
+        AABB rightBox;
+        rightBox.min.x = packedBox.right.center[0] - packedBox.right.halfDim[0];
+        rightBox.min.y = packedBox.right.center[1] - packedBox.right.halfDim[1];
+        rightBox.min.z = packedBox.right.center[2] - packedBox.right.halfDim[2];
+        rightBox.max.x = packedBox.right.center[0] + packedBox.right.halfDim[0];
+        rightBox.max.y = packedBox.right.center[1] + packedBox.right.halfDim[1];
+        rightBox.max.z = packedBox.right.center[2] + packedBox.right.halfDim[2];
 
-            box.min.x = std::min(leftBox.min.x, rightBox.min.x);
-            box.min.y = std::min(leftBox.min.y, rightBox.min.y);
-            box.min.z = std::min(leftBox.min.z, rightBox.min.z);
-            box.max.x = std::max(leftBox.max.x, rightBox.max.x);
-            box.max.y = std::max(leftBox.max.y, rightBox.max.y);
-            box.max.z = std::max(leftBox.max.z, rightBox.max.z);
-        }
+        box.min.x = std::min(leftBox.min.x, rightBox.min.x);
+        box.min.y = std::min(leftBox.min.y, rightBox.min.y);
+        box.min.z = std::min(leftBox.min.z, rightBox.min.z);
+        box.max.x = std::max(leftBox.max.x, rightBox.max.x);
+        box.max.y = std::max(leftBox.max.y, rightBox.max.y);
+        box.max.z = std::max(leftBox.max.z, rightBox.max.z);
     }
 }

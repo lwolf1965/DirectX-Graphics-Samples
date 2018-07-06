@@ -29,7 +29,7 @@ BoundingBox ComputeLeafAABB(uint leafIndex, uint unused, out uint2 boxInfo)
     BoundingBox rightRootBox = GetRightBoxFromBVH(bottomLevelAccelerationStructure, 0, rightRootBoxInfo);
     
     boxInfo.x = leafIndex;
-    boxInfo.y = IsLeafFlag;
+    boxInfo.y = IsLeafFlag | IsProceduralGeometryFlag | MinNumberOfLeafNodeBVHs;
 
     AABB box = GetAABBFromChildBoxes(leftRootBox, rightRootBox);
     AffineMatrix ObjectToWorld = CreateMatrix(metadata.ObjectToWorld);

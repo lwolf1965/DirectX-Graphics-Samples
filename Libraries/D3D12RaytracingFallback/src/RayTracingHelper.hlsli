@@ -22,8 +22,10 @@
 #define NumberOfVerticesPerTriangle 3
 static const int IsLeafFlag               = 0x80000000;
 static const int IsProceduralGeometryFlag = 0x40000000;
-static const int LeafFlags = IsLeafFlag | IsProceduralGeometryFlag;
+static const int IsDummyFlag              = 0x20000000;
+static const int LeafFlags = IsLeafFlag | IsProceduralGeometryFlag | IsDummyFlag;
 static const int MinNumberOfPrimitives = 1;
+static const int MinNumberOfLeafNodeBVHs = 1;
 
 // BVH description for the traversal shader
 //struct BVHOffsets
@@ -88,6 +90,11 @@ bool IsProceduralGeometry(uint2 info)
     return (info.y & IsProceduralGeometryFlag);
 }
 
+bool IsDummy(uint2 info)
+{
+    return (info.y & IsDummyFlag);
+}
+
 uint GetLeafIndexFromInfo(uint2 info)
 {
     return info.x;
@@ -115,18 +122,26 @@ uint GetNumPrimitivesFromInfo(uint2 info)
 
 uint CombinePrimitiveFlags(uint flags1, uint flags2)
 {
-    uint combinedLeafFlags = GetLeafFlagsFromPrimitiveFlags(flags1)
+    uint combinedFlags =     GetLeafFlagsFromPrimitiveFlags(flags1)
                            | GetLeafFlagsFromPrimitiveFlags(flags2);
+    combinedFlags &= ~(IsLeafFlag | IsDummyFlag);
 
     uint combinedPrimitives = GetNumPrimitivesFromPrimitiveFlags(flags1)
                             + GetNumPrimitivesFromPrimitiveFlags(flags2);
 
-    return combinedLeafFlags | combinedPrimitives;
+    return combinedFlags | combinedPrimitives;
 }
 
 uint GetAABBNodeAddress(uint startAddress, uint boxIndex)
 {
     return startAddress + boxIndex * SizeOfAABBNode;
+}
+
+BoundingBox CreateDummyBox(out uint2 info)
+{
+    BoundingBox box;
+    info = uint2(0, IsLeafFlag | IsDummyFlag);
+    return box;
 }
 
 void CompressBox(BoundingBox box, uint childIndex, uint primitiveFlags, out uint4 data1, out uint4 data2)

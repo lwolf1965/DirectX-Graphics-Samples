@@ -361,7 +361,8 @@ struct AABBNodeSibling
 #else
     struct 
     {
-        uint    numPrimitives : 30;
+        uint    numPrimitives : 29;
+        uint    isDummy : 1;
         uint    isProcedural : 1;
         uint    isLeaf : 1;
     };

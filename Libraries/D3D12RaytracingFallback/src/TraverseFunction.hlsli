@@ -753,7 +753,7 @@ void TraverseTLAS(
         uint2 leftInfo, rightInfo;
         BoundingBox leftBox, rightBox;
         uint leftChildIndex, rightChildIndex;
-        bool leftHit, rightHit;
+        bool leftHit = false, rightHit = false;
         float leftT, rightT;
 
         leftBox = GetLeftBoxFromBVH(currentBVH, nodeIndex, leftInfo);
@@ -765,16 +765,19 @@ void TraverseTLAS(
                     currentRayData.InverseDirection,
                     leftBox.center,
                     leftBox.halfDim);
-
-        rightHit = RayBoxTest(rightT,
+        
+        if (IsDummy(rightInfo))
+        {
+            rightHit = RayBoxTest(rightT,
                     Fallback_RayTCurrent(),
                     currentRayData.OriginTimesRayInverseDirection,
                     currentRayData.InverseDirection,
                     rightBox.center,
                     rightBox.halfDim);
+        }
 
         RecordClosestBox(currentLevel, leftHit, leftT, rightHit, rightT, g_closestBoxT);
-        
+
         uint2 firstInfo, secondInfo;
 
         if (leftHit && rightHit)

@@ -1156,11 +1156,17 @@ namespace FallbackLayerUnitTests
 
             for (UINT parentIndex = 0; parentIndex < numInternalNodes; parentIndex++) {
                 AABBNode parent = pNodeArray[parentIndex];
+                if (!parent.left.isLeaf)
+                {
+                    UINT leftChildIndex = parent.left.childNodeIndex;
+                    Assert::IsTrue(pParentIndexCache[leftChildIndex] == parentIndex, L"Left child parent index incorrectly assigned.");
+                }
 
-                UINT leftChildIndex = parent.left.childNodeIndex;
-                UINT rightChildIndex = parent.right.childNodeIndex;
-                Assert::IsTrue(pParentIndexCache[leftChildIndex] == parentIndex, L"Left child parent index incorrectly assigned.");
-                Assert::IsTrue(pParentIndexCache[rightChildIndex] == parentIndex, L"Right child parent index incorrectly assigned.");
+                if (!parent.right.isLeaf)
+                {
+                    UINT rightChildIndex = parent.right.childNodeIndex;
+                    Assert::IsTrue(pParentIndexCache[rightChildIndex] == parentIndex, L"Right child parent index incorrectly assigned.");
+                }
             }
         }
 
