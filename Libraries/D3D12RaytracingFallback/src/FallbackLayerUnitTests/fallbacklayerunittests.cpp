@@ -2614,9 +2614,9 @@ namespace FallbackLayerUnitTests
             return CalculateMortonCode(centroid, sceneAABB);
         }
 
-        unsigned int CalculateMortonCode(AABBNode &box, AABB sceneAABB)
+        unsigned int CalculateMortonCode(AABBNodeSibling &box, AABB sceneAABB)
         {
-            float3 centroid = { box.left.center[0], box.left.center[1], box.left.center[2] };
+            float3 centroid = { box.center[0], box.center[1], box.center[2] };
             return CalculateMortonCode(centroid, sceneAABB);
         }
 
@@ -2649,7 +2649,7 @@ namespace FallbackLayerUnitTests
             srand(42);
             std::vector<Primitive> triangles;
             std::vector<PrimitiveMetaData> trianglesMetadata;
-            std::vector<AABBNode> boxes;
+            std::vector<AABBNodeSibling> boxes;
             std::vector<BVHMetadata> boxMetadata;
 
             UINT dataSize;
@@ -2709,27 +2709,26 @@ namespace FallbackLayerUnitTests
             {
                 for (UINT i = 0; i < numElements; i++)
                 {
-                    AABBNode box;
+                    AABBNodeSibling box;
                     for (uint axis = 0; axis < 3; axis++)
                     {
-                        box.left.center[axis] = (float)rand() - (RAND_MAX / 2.0f);
-                        box.left.halfDim[axis] = (float)rand() / 2.0f;
-
-                        box.right.center[axis] = (float)rand() - (RAND_MAX / 2.0f);
-                        box.right.halfDim[axis] = (float)rand() / 2.0f;
+                        box.center[axis] = (float)rand() - (RAND_MAX / 2.0f);
+                        box.halfDim[axis] = (float)rand() / 2.0f;
                     }
+
                     float3 boxMin = {
-                        box.left.center[0] - box.left.halfDim[0],
-                        box.left.center[1] - box.left.halfDim[1],
-                        box.left.center[2] - box.left.halfDim[2] };
+                        box.center[0] - box.halfDim[0],
+                        box.center[1] - box.halfDim[1],
+                        box.center[2] - box.halfDim[2] };
 
                     float3 boxMax = {
-                        box.left.center[0] + box.left.halfDim[0],
-                        box.left.center[1] + box.left.halfDim[1],
-                        box.left.center[2] + box.left.halfDim[2] };
+                        box.center[0] + box.halfDim[0],
+                        box.center[1] + box.halfDim[1],
+                        box.center[2] + box.halfDim[2] };
 
                     containingAABB.min = min(containingAABB.min, boxMin);
                     containingAABB.max = max(containingAABB.max, boxMax);
+
                     boxes.push_back(box);
 
                     if (pOutputMetadata)
@@ -2753,7 +2752,7 @@ namespace FallbackLayerUnitTests
                     }
                 }
 
-                dataSize = (UINT)(boxes.size() * sizeof(AABBNode));
+                dataSize = (UINT)(boxes.size() * sizeof(AABBNodeSibling));
                 pSourceData = boxes.data();
 
                 if (pOutputMetadata)
@@ -2834,7 +2833,7 @@ namespace FallbackLayerUnitTests
             AABB calculatedAABB;
             m_d3d12Context.ReadbackResource(pOutputAABBBuffer, &calculatedAABB, sizeof(calculatedAABB));
 
-            Assert::IsTrue(memcmp(&expectedAABB, &calculatedAABB, sizeof(expectedAABB)) == 0, L"Calculated AAB incorrect");
+            Assert::IsTrue(memcmp(&expectedAABB, &calculatedAABB, sizeof(expectedAABB)) == 0, L"Calculated AABB incorrect");
         }
 
         bool IsMortonCodeEqual(UINT codeA, UINT codeB)
@@ -2944,6 +2943,9 @@ namespace FallbackLayerUnitTests
 
             std::vector<UINT32> calculatedMortonCodes(numElements);
             m_d3d12Context.ReadbackResource(pOutputMortonCodeBuffer, calculatedMortonCodes.data(), (UINT)(calculatedMortonCodes.size() * sizeof(UINT32)));
+
+            MortonCodeIndexPair *pExpectedMortonCodes = expectedMortonCodes.data();
+            UINT32 *pCalculatedMortonCodes = calculatedMortonCodes.data();
 
             for (UINT i = 0; i < numElements; i++)
             {

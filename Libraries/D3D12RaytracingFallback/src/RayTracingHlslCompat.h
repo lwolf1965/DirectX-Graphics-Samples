@@ -57,15 +57,6 @@ struct AABB
 };
 #define SizeOfAABB (6 * 4)
 #ifdef HLSL
-AABB RawDataToAABB(uint4 a, uint2 b)
-{
-    AABB aabb;
-    aabb.min = asfloat(a.xyz);
-    aabb.max = asfloat(uint3(a.w, b.xy));
-
-    return aabb;
-}
-
 void AABBToRawData(in AABB aabb, out uint4 a, out uint2 b)
 {
     a = asuint(float4(aabb.min.xyz, aabb.max.x));
@@ -168,7 +159,11 @@ Triangle GetTriangle(Primitive prim)
 
 AABB GetProceduralPrimitiveAABB(Primitive prim)
 {
-    return RawDataToAABB(prim.data0, prim.data1.xy);
+    AABB aabb;
+    aabb.min = asfloat(prim.data0.xyz);
+    aabb.max = asfloat(uint3(prim.data0.w, prim.data1.xy));
+
+    return aabb;
 }
 
 #endif
