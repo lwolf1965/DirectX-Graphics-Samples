@@ -1192,7 +1192,7 @@ namespace FallbackLayerUnitTests
 
             CComPtr<ID3D12Resource> pVertexBuffer;
             m_d3d12Context.CreateResourceWithInitialData(
-                startVertices,
+                updatedVertices,
                 sizeof(float) * numFloats,
                 &pVertexBuffer);
 
@@ -1260,7 +1260,6 @@ namespace FallbackLayerUnitTests
             bottomLevelDesc.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
             geometryDesc.Triangles.VertexBuffer.StartAddress = pUpdatedVertexBuffer->GetGPUVirtualAddress();
 
-            
             pBuilder->BuildRaytracingAccelerationStructure(
                 pCommandList,
                 &bottomLevelDesc,
@@ -1274,8 +1273,11 @@ namespace FallbackLayerUnitTests
             std::unique_ptr<BYTE[]> outputData = std::unique_ptr<BYTE[]>(new BYTE[(UINT)prebuildInfo.ResultDataMaxSizeInBytes]);
             Assert::AreNotEqual(outputData.get(), (BYTE *)nullptr, L"Failed to allocate output data");
 
+            BYTE *pOutputData = outputData.get();
+
             m_d3d12Context.ReadbackResource(pBottomLevelResource, outputData.get(), (UINT)prebuildInfo.ResultDataMaxSizeInBytes);
 
+            CpuGeometryDescriptor cpuGeomDescBefore = CpuGeometryDescriptor(startVertices, numVertices);
             CpuGeometryDescriptor cpuGeomDescAfter = CpuGeometryDescriptor(updatedVertices, numVertices);
 
             std::wstring errorMessage;

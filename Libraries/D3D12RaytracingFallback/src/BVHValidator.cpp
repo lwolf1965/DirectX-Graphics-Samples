@@ -87,6 +87,7 @@ namespace FallbackLayer
 
             nodeQueue.push_back(&pNodeArray[0]);
             UINT nodesInLevel = 1;
+            UINT currentLevel = 0;
             while (nodeQueue.size())
             {
                 AABBNode *pCompressedNode = nodeQueue.front();
@@ -167,6 +168,7 @@ namespace FallbackLayer
                         pLeaf->LeafFound = false;
                     }
                     nodesInLevel = static_cast<UINT>(nodeQueue.size());
+                    currentLevel++;
                 }
             }
             ThrowErrorIfFalse(pExpectedLeafNodes.size() == 0, L"Didn't find a leaf node for one or more of the expected leaves");
