@@ -767,12 +767,13 @@ inline void TraverseTLAS(
             leftBox.center,
             leftBox.halfDim);
 
-        rightHit = RayBoxTest(rightT,
-            Fallback_RayTCurrent(),
-            currentRayData.OriginTimesRayInverseDirection,
-            currentRayData.InverseDirection,
-            rightBox.center,
-            rightBox.halfDim);
+        rightHit = !IsDummy(rightInfo) && 
+            RayBoxTest(rightT,
+                Fallback_RayTCurrent(),
+                currentRayData.OriginTimesRayInverseDirection,
+                currentRayData.InverseDirection,
+                rightBox.center,
+                rightBox.halfDim);
 
         RecordClosestBox(currentLevel, leftHit, leftT, rightHit, rightT, g_closestBoxT);
 
