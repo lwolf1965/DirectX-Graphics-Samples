@@ -192,7 +192,7 @@ void WriteRightBoxToBuffer(
     WriteBoxToBuffer(buffer, boxAddress, box, extraInfo);
 }
 
-BoundingBox RawDataToBoundingBox(int4 a, int4 b, out uint2 extraInfo)
+BoundingBox RawDataToBoundingBox(uint4 a, uint4 b, out uint2 extraInfo)
 {
     BoundingBox box;
     box.center.x = asfloat(a.y);
@@ -208,8 +208,8 @@ BoundingBox RawDataToBoundingBox(int4 a, int4 b, out uint2 extraInfo)
 
 BoundingBox GetBoxFromBuffer(RWByteAddressBuffer buffer, uint aabbNodeAddress, out uint2 extraInfo)
 {
-    int4 data1 = buffer.Load4(aabbNodeAddress);
-    int4 data2 = buffer.Load4(aabbNodeAddress + 16);
+    uint4 data1 = buffer.Load4(aabbNodeAddress);
+    uint4 data2 = buffer.Load4(aabbNodeAddress + 16);
 
     return RawDataToBoundingBox(data1, data2, extraInfo);
 }
@@ -230,7 +230,7 @@ BoundingBox GetRightBoxFromBuffer(
     uint parentNodeIndex,
     out uint2 extraInfo)
 {
-    uint aabbNodeAddress = GetAABBNodeAddress(nodeStartOffset, parentNodeIndex) + 32;
+    uint aabbNodeAddress = GetAABBNodeAddress(nodeStartOffset, parentNodeIndex) + SizeOfAABBNodeSibling;
     return GetBoxFromBuffer(buffer, aabbNodeAddress, extraInfo);
 }
 

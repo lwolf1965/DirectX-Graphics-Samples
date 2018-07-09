@@ -2934,8 +2934,15 @@ namespace FallbackLayerUnitTests
 
             m_d3d12Context.ExecuteCommandList(pCommandList);
 
+            std::vector<AABBNodeSibling> outputAABBs(numElements);
+            m_d3d12Context.ReadbackResource(pTriangleBuffer, outputAABBs.data(), (UINT)(outputAABBs.size() * sizeof(*outputAABBs.data())));
+            AABBNodeSibling *pOutputAABBs = outputAABBs.data();
+
+
             std::vector<UINT32> indices(numElements);
             m_d3d12Context.ReadbackResource(pOutputIndexBuffer, indices.data(), (UINT)(indices.size() * sizeof(UINT32)));
+            UINT32 *pOutputIndices = indices.data();
+
             for (UINT i = 0; i < numElements; i++)
             {
                 Assert::IsTrue(i == indices[i], L"Calculated indices incorrect");
@@ -3285,8 +3292,8 @@ namespace FallbackLayerUnitTests
             }
             case SceneType::BottomLevelBVHs:
             {
-                AABBNode *pInputAABBs = (AABBNode *)pInputData;
-                AABBNode *pOutputAABBs = (AABBNode *)pOutputData;
+                AABBNodeSibling *pInputAABBs = (AABBNodeSibling *)pInputData;
+                AABBNodeSibling *pOutputAABBs = (AABBNodeSibling *)pOutputData;
                 BVHMetadata* pInputAABBMetadata = (BVHMetadata*)pInputMetadata;
                 BVHMetadata* pOutputAABBMetadata = (BVHMetadata*)pOutputMetadata;
                 for (UINT i = 0; i < numElements; i++)
@@ -3295,7 +3302,7 @@ namespace FallbackLayerUnitTests
                     UINT outputIndex = i;
 
                     Assert::IsTrue(
-                        memcmp(&pInputAABBs[inputIndex], &pOutputAABBs[outputIndex], sizeof(AABBNode)) == 0,
+                        memcmp(&pInputAABBs[inputIndex], &pOutputAABBs[outputIndex], sizeof(AABBNodeSibling)) == 0,
                         L"AABBs in output buffers not correctly in reverse order");
 
                     Assert::IsTrue(

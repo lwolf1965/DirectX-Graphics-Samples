@@ -363,7 +363,7 @@ struct AABBNodeSibling
     };
 #endif
 };
-#define SizeOfAABBNodeSibling (4 * 8)
+#define SizeOfAABBNodeSibling (8 * 4)
 #ifndef HLSL
 static_assert(sizeof(AABBNodeSibling) == SizeOfAABBNodeSibling, L"Incorrect sizeof for AABB");
 #endif
