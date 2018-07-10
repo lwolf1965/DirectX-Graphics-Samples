@@ -1264,7 +1264,7 @@ namespace FallbackLayerUnitTests
                 pCommandList,
                 &bottomLevelDesc,
                 nullptr);
-            
+
             pCommandList->Close();
             m_d3d12Context.ExecuteCommandList(pCommandList);
             m_d3d12Context.WaitForGpuWork();

@@ -509,7 +509,7 @@ inline BLASContext GetBLASFromTopLevelLeaf(
     in RWByteAddressBufferPointer topLevelAccelerationStructure,
     in uint offsetToInstanceDescs,
     in uint InstanceInclusionMask,
-    out bool isValid
+    out bool isValidInstance
 )
 {
     BLASContext blasContext;
@@ -524,33 +524,29 @@ inline BLASContext GetBLASFromTopLevelLeaf(
     
     RaytracingInstanceDesc instanceDesc = metadata.instanceDesc;
     
-    bool validInstance = GetInstanceMask(instanceDesc) & InstanceInclusionMask;
+    isValidInstance = GetInstanceMask(instanceDesc) & InstanceInclusionMask;
 
-    if (!validInstance)
+    if (isValidInstance)
     {
-        isValid = false;
-        return blasContext;
+        MARK(7, 0);
+
+        blasContext.instanceIndex = metadata.InstanceIndex;
+        blasContext.instanceOffset = GetInstanceContributionToHitGroupIndex(instanceDesc);
+        blasContext.instanceId = GetInstanceID(instanceDesc);
+
+        blasContext.instanceGpuVA = instanceDesc.AccelerationStructure;
+        blasContext.instanceFlags = GetInstanceFlags(instanceDesc);
+
+        float3x4 CurrentWorldToObject = CreateMatrix(instanceDesc.Transform);
+        float3x4 CurrentObjectToWorld = CreateMatrix(metadata.ObjectToWorld);
+
+        float3 objectSpaceOrigin = mul(CurrentWorldToObject, float4(WorldRayOrigin(), 1));
+        float3 objectSpaceDirection = mul(CurrentWorldToObject, float4(WorldRayDirection(), 0));
+
+        blasContext.rayData = GetRayData(objectSpaceOrigin, objectSpaceDirection);
+
+        UpdateObjectSpaceProperties(objectSpaceOrigin, objectSpaceDirection, CurrentWorldToObject, CurrentObjectToWorld);
     }
-    isValid = true;
-
-    MARK(7, 0);
-
-    blasContext.instanceIndex = metadata.InstanceIndex;
-    blasContext.instanceOffset = GetInstanceContributionToHitGroupIndex(instanceDesc);
-    blasContext.instanceId = GetInstanceID(instanceDesc);
-
-    blasContext.instanceGpuVA = instanceDesc.AccelerationStructure;
-    blasContext.instanceFlags = GetInstanceFlags(instanceDesc);
-
-    float3x4 CurrentWorldToObject = CreateMatrix(instanceDesc.Transform);
-    float3x4 CurrentObjectToWorld = CreateMatrix(metadata.ObjectToWorld);
-
-    float3 objectSpaceOrigin = mul(CurrentWorldToObject, float4(WorldRayOrigin(), 1));
-    float3 objectSpaceDirection = mul(CurrentWorldToObject, float4(WorldRayDirection(), 0));
-
-    blasContext.rayData = GetRayData(objectSpaceOrigin, objectSpaceDirection);
-
-    UpdateObjectSpaceProperties(objectSpaceOrigin, objectSpaceDirection, CurrentWorldToObject, CurrentObjectToWorld);
     
     return blasContext;
 }
@@ -559,9 +555,7 @@ inline bool CheckHitProcedural(
     in uint hitGroupRecordOffset,
     in uint primitiveIndex,
 
-    in BLASContext blasContext,
-
-    inout uint flagContainer
+    in BLASContext blasContext
 )
 {
     Fallback_SetPendingCustomVals(hitGroupRecordOffset, primitiveIndex, blasContext.instanceIndex, blasContext.instanceId);
@@ -572,9 +566,7 @@ inline bool CheckHitProcedural(
     Fallback_SetAnyHitStateId(anyHitStateId);
     Fallback_SetAnyHitResult(ACCEPT);
     Fallback_CallIndirect(intersectionStateId);
-    SetBoolFlag(flagContainer, EndSearch, Fallback_AnyHitResult() == END_SEARCH);
-
-    return true;
+    return (Fallback_AnyHitResult() == END_SEARCH);
 }
 
 inline bool CheckHitTriangles(
@@ -585,11 +577,9 @@ inline bool CheckHitTriangles(
 
     in RWByteAddressBufferPointer bottomLevelAccelerationStructure,
     
-    in BLASContext blasContext,
-
-    inout uint flagContainer
+    in BLASContext blasContext
 )
-{   
+{
     float resultT = Fallback_RayTCurrent();
     float2 resultBary;
     uint resultTriId;
@@ -632,7 +622,7 @@ inline bool CheckHitTriangles(
     {
         MARK(8, 1);
         Fallback_CommitHit();
-        SetBoolFlag(flagContainer, EndSearch, RayFlags() & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH);
+        return (RayFlags() & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH);
     }
     else
     {
@@ -646,10 +636,8 @@ inline bool CheckHitTriangles(
         if (ret != IGNORE)
             Fallback_CommitHit();
 
-        SetBoolFlag(flagContainer, EndSearch, (ret == END_SEARCH) || (RayFlags() & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH));
+        return (ret == END_SEARCH) || (RayFlags() & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH);
     }
-
-    return true;
 }
 
 inline bool CheckHitOnBottomLevelLeaf(
@@ -659,9 +647,7 @@ inline bool CheckHitOnBottomLevelLeaf(
     in BLASContext blasContext,
 
     in uint RayContributionToHitGroupIndex,
-    in uint MultiplierForGeometryContributionToHitGroupIndex,
-
-    inout uint flagContainer
+    in uint MultiplierForGeometryContributionToHitGroupIndex
 )
 {
     MARK(8, 0);
@@ -677,8 +663,7 @@ inline bool CheckHitOnBottomLevelLeaf(
 #ifdef DISABLE_PROCEDURAL_GEOMETRY
     isProceduralGeometry = false;
 #endif
-    bool endSearch = false;
-    
+
     uint hitGroupRecordOffset = GetHitGroupRecordOffset(
         primitiveMetadata.GeometryContributionToHitGroupIndex,
         blasContext.instanceOffset,
@@ -696,8 +681,7 @@ inline bool CheckHitOnBottomLevelLeaf(
             return CheckHitProcedural(
                 hitGroupRecordOffset,
                 primitiveIndex,
-                blasContext,
-                flagContainer
+                blasContext
             );
         }
         else // Triangle Geometry
@@ -708,8 +692,7 @@ inline bool CheckHitOnBottomLevelLeaf(
                 primitiveIndex,
                 opaque,
                 bottomLevelAccelerationStructure,
-                blasContext,
-                flagContainer
+                blasContext
             );
         }
     }
@@ -717,7 +700,7 @@ inline bool CheckHitOnBottomLevelLeaf(
     return false;
 }
 
-inline void TraverseTLAS(
+inline bool TraverseTLAS(
     // Original function parameters
     in uint InstanceInclusionMask,
     in uint RayContributionToHitGroupIndex,
@@ -731,8 +714,6 @@ inline void TraverseTLAS(
     in uint rootIndex
 )
 {
-    uint flagContainer = 0;
-
     uint currentLevel = 0;
 
     uint nodesToProcess[NUM_BVH_LEVELS];
@@ -828,21 +809,17 @@ inline void TraverseTLAS(
                     break;
 
                     case BOTTOM_LEVEL_INDEX:
-                    CheckHitOnBottomLevelLeaf(
+                    if (CheckHitOnBottomLevelLeaf(
                         hitInfo,
 
                         currentBVH,
                         currentBLASContext,
 
                         RayContributionToHitGroupIndex,
-                        MultiplierForGeometryContributionToHitGroupIndex,
-
-                        flagContainer
-                    );
-
-                    if (GetBoolFlag(flagContainer, EndSearch))
+                        MultiplierForGeometryContributionToHitGroupIndex
+                    ))
                     {
-                        return; // Done.
+                        return true; // Done.                        
                     }
                     break;
                 }
@@ -863,19 +840,22 @@ inline void TraverseTLAS(
                 bvhLevelIndex = BOTTOM_LEVEL_INDEX;
                 StackPush(bvhLevelIndex, nodesToProcess[bvhLevelIndex], 0);
                 currentBLASContext = savedBLASContexts[blasCtxPtr++];
-                numSavedBLAS--;                
+                numSavedBLAS--;
+                if (numSavedBLAS == 0)
+                    blasCtxPtr = 0;                
                 currentBVH = CreateRWByteAddressBufferPointerFromGpuVA(currentBLASContext.instanceGpuVA);
                 currentRayData = currentBLASContext.rayData;
             }
         }
         else if (bvhLevelIndex == BOTTOM_LEVEL_INDEX && nodesToProcess[BOTTOM_LEVEL_INDEX] == 0)
         {
-            blasCtxPtr = 0;
             bvhLevelIndex = TOP_LEVEL_INDEX;
             currentBVH = CreateRWByteAddressBufferPointerFromGpuVA(TopLevelAccelerationStructureGpuVA);
             currentRayData = GetRayData(WorldRayOrigin(), WorldRayDirection());
         }
     }
+
+    return false;
 }
 
 bool Traverse(
