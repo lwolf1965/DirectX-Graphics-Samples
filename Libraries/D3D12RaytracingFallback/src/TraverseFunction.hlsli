@@ -51,16 +51,12 @@ void RecordClosestBox(uint currentLevel, inout bool leftTest, float leftT, inout
 
 void StackPush(uint level, inout int stackTop, uint value)
 {
-    uint stackIndex = stackTop;
-    stacks[level][stackIndex] = value;
-    stackTop++;
+    stacks[level][stackTop++] = value;
 }
 
 uint StackPop(uint level, inout int stackTop)
 {
-    --stackTop;
-    uint stackIndex = stackTop;
-    return stacks[level][stackIndex];
+    return stacks[level][--stackTop];
 }
 
 int InvokeAnyHit(int stateId)
@@ -512,7 +508,6 @@ inline BLASContext GetBLASFromTopLevelLeaf(
     out bool isValidInstance
 )
 {
-    BLASContext blasContext;
     MARK(6, 0);
     
     uint leafIndex = GetLeafIndexFromInfo(leafInfo);
@@ -525,6 +520,8 @@ inline BLASContext GetBLASFromTopLevelLeaf(
     RaytracingInstanceDesc instanceDesc = metadata.instanceDesc;
     
     isValidInstance = GetInstanceMask(instanceDesc) & InstanceInclusionMask;
+
+    BLASContext blasContext;
 
     if (isValidInstance)
     {
@@ -586,16 +583,16 @@ inline bool CheckHitTriangles(
 
     // TODO: We need to break out this function so we can run anyhit on each triangle
     bool triangleHit = TestLeafNodeIntersections( 
-            bottomLevelAccelerationStructure,
-            nodeInfo,
-            blasContext.instanceFlags,
-            ObjectRayOrigin(),
-            ObjectRayDirection(),
-            blasContext.rayData.SwizzledIndices,
-            blasContext.rayData.Shear,
-            resultBary,
-            resultT,
-            resultTriId);
+        bottomLevelAccelerationStructure,
+        nodeInfo,
+        blasContext.instanceFlags,
+        ObjectRayOrigin(),
+        ObjectRayDirection(),
+        blasContext.rayData.SwizzledIndices,
+        blasContext.rayData.Shear,
+        resultBary,
+        resultT,
+        resultTriId);
     
     if (!triangleHit)
     {
@@ -664,18 +661,17 @@ inline bool CheckHitOnBottomLevelLeaf(
     isProceduralGeometry = false;
 #endif
 
-    uint hitGroupRecordOffset = GetHitGroupRecordOffset(
-        primitiveMetadata.GeometryContributionToHitGroupIndex,
-        blasContext.instanceOffset,
-        MultiplierForGeometryContributionToHitGroupIndex,
-        RayContributionToHitGroupIndex,
-        HitGroupShaderRecordStride
-    );
-
-    uint primitiveIndex = primitiveMetadata.PrimitiveIndex;
-
     if (!culled)
     {
+        uint hitGroupRecordOffset = GetHitGroupRecordOffset(
+            primitiveMetadata.GeometryContributionToHitGroupIndex,
+            blasContext.instanceOffset,
+            MultiplierForGeometryContributionToHitGroupIndex,
+            RayContributionToHitGroupIndex,
+            HitGroupShaderRecordStride
+        );
+
+        uint primitiveIndex = primitiveMetadata.PrimitiveIndex;
         if (isProceduralGeometry)
         {
             return CheckHitProcedural(
@@ -765,14 +761,13 @@ inline bool TraverseTLAS(
 
         if (hitBoth)
         {
-            // If equal, traverse the left side first since it's encoded to have fewer triangles
             bool rightSideCloser = rightT < leftT;
 
             if (rightSideCloser)
             {
                 firstInfo = rightInfo; secondInfo = leftInfo;
             }
-            else
+            else // If equal, traverse the left side first since it's encoded to have fewer triangles
             {
                 firstInfo = leftInfo; secondInfo = rightInfo;
             }
@@ -784,12 +779,10 @@ inline bool TraverseTLAS(
 
         bool hasHit = hitOne;
         uint2 hitInfo = firstInfo;
-        for(uint i = 0; i < 2 && hasHit; i++) // Want this to loop twice for first, second
+        for(uint i = 0; i < 2 && hasHit; i++) // Want this to loop at most twice for first, second
         {
             if (IsLeaf(hitInfo))
             {
-                // If top level, traverse BVH on bottom level.
-                // Otherwise, we're bottom level.
                 switch (bvhLevelIndex)
                 {
                     case TOP_LEVEL_INDEX:
@@ -866,12 +859,11 @@ bool Traverse(
 {
     uint GroupIndex = Fallback_GroupIndex();
     const GpuVA nullptr = GpuVA(0, 0);
-
-    GpuVA currentGpuVA = TopLevelAccelerationStructureGpuVA;
-    RWByteAddressBufferPointer topLevelAccelerationStructure = CreateRWByteAddressBufferPointerFromGpuVA(currentGpuVA);
+    
+    RWByteAddressBufferPointer topLevelAccelerationStructure = CreateRWByteAddressBufferPointerFromGpuVA(TopLevelAccelerationStructureGpuVA);
     uint offsetToInstanceDescs = GetOffsetToInstanceDesc(topLevelAccelerationStructure);
 
-    uint rootIndex = 0;
+    uint rootNodeIndex = 0;
 
     RayData currentRayData = GetRayData(WorldRayOrigin(), WorldRayDirection());
 
@@ -889,7 +881,7 @@ bool Traverse(
 
         topLevelAccelerationStructure,
         offsetToInstanceDescs, 
-        rootIndex
+        rootNodeIndex
     );
 
     MARK(10,0);
