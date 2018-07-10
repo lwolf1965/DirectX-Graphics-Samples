@@ -730,7 +730,6 @@ inline bool TraverseTLAS(
 
         uint2 leftInfo, rightInfo;
         BoundingBox leftBox, rightBox;
-        uint leftChildIndex, rightChildIndex;
         bool leftHit, rightHit;
         float leftT, rightT;
 
