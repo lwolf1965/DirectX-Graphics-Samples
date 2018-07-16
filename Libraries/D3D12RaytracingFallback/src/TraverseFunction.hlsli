@@ -738,6 +738,8 @@ bool Traverse(
 
     bool endSearch = false;
 
+    uint moo = 0;
+
     MARK(2, 0);
     while (nodesToProcess[currentBVHLevel] != 0)
     {
@@ -786,11 +788,12 @@ bool Traverse(
 
         RecordClosestBox(currentBVHLevel, leftHit, leftT, rightHit, rightT, g_closestBoxT);
 
-        uint2 firstInfo, secondInfo;
         bool singleHit, doubleHit;
         
         singleHit = leftHit || rightHit;
         doubleHit = leftHit && rightHit;
+
+        uint2 firstInfo, secondInfo;
 
         if (doubleHit)
         {
@@ -869,14 +872,18 @@ bool Traverse(
                 }
                 else // if it's a bottom level
                 {
+#define SAFE_COMPILER
+#ifdef SAFE_COMPILER
                     endSearch = true;
-                    // endSearch = CheckHitOnBottomLevelLeaf(
-                    //     secondInfo,
-                    //     currentBVH,
-                    //     blasContext,
-                    //     RayContributionToHitGroupIndex,
-                    //     MultiplierForGeometryContributionToHitGroupIndex
-                    // );
+#else
+                    endSearch = CheckHitOnBottomLevelLeaf(
+                        secondInfo,
+                        currentBVH,
+                        blasContext,
+                        RayContributionToHitGroupIndex,
+                        MultiplierForGeometryContributionToHitGroupIndex
+                    );
+#endif
                 }
             }
             else
@@ -919,6 +926,7 @@ bool Traverse(
                     blasContext.worldToObject, 
                     blasContext.objectToWorld
                 );
+
             }
 
             if (!hasSavedBLASContexts && currentBVHLevel == BOTTOM_LEVEL_INDEX)
