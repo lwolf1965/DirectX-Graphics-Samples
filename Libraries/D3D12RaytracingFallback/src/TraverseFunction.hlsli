@@ -16,6 +16,9 @@
 #define BOTTOM_LEVEL_INDEX 1
 #define NUM_BVH_LEVELS 2
 
+static
+uint    stack[TRAVERSAL_MAX_STACK_DEPTH];
+
 static float g_closestBoxT = FLT_MAX;
 
 static
@@ -27,6 +30,9 @@ void VisualizeAcceleratonStructure(float closestBoxT)
 {
     g_screenOutput[DispatchRaysIndex()] = float4(closestBoxT / 3000.0f, 0, 0, 1);
 }
+
+static
+uint    depthStack[TRAVERSAL_MAX_STACK_DEPTH];
 #endif
 
 void RecordClosestBox(uint currentLevel, inout bool leftTest, float leftT, inout bool rightTest, float rightT, inout float closestBoxT)
@@ -49,12 +55,34 @@ void RecordClosestBox(uint currentLevel, inout bool leftTest, float leftT, inout
 #endif
 }
 
-void StackPush(uint level, inout int stackTop, uint value)
+void _StackPush(uint level, inout int stackTop, uint value)
 {
     stacks[level][stackTop++] = value;
 }
 
-uint StackPop(uint level, inout int stackTop)
+uint _StackPop(uint level, inout int stackTop)
+{
+    return stacks[level][--stackTop];
+}
+
+void StackPush(inout int stackTop, uint level, uint value)
+{
+    stacks[level][stackTop++] = value;
+}
+
+void StackPush2(inout int stackTop, uint level, bool selector, uint valueA, uint valueB)
+{
+    const uint store0 = selector ? valueA : valueB;
+    const uint store1 = selector ? valueB : valueA;
+    const uint stackIndex0 = (stackTop + 0);
+    const uint stackIndex1 = (stackTop + 1);
+    stacks[level][stackIndex0] = store0;
+    stacks[level][stackIndex1] = store1;
+
+    stackTop += 2;
+}
+
+uint StackPop(inout int stackTop, uint level)
 {
     return stacks[level][--stackTop];
 }
@@ -165,7 +193,7 @@ void RayTriangleIntersect(
     out float2 bary,
     float3 rayOrigin,
     float3 rayDirection,
-    int3 swizzledIndices,
+    int3 swizzledIndicies,
     float3 shear,
     float3 v0,
     float3 v1,
@@ -179,9 +207,9 @@ void RayTriangleIntersect(
     bool useBackfaceCulling = useCulling && (RayFlags() & backFaceCullingFlag);
     bool useFrontfaceCulling = useCulling && (RayFlags() & frontFaceCullingFlag);
 
-    float3 A = Swizzle(v0 - rayOrigin, swizzledIndices);
-    float3 B = Swizzle(v1 - rayOrigin, swizzledIndices);
-    float3 C = Swizzle(v2 - rayOrigin, swizzledIndices);
+    float3 A = Swizzle(v0 - rayOrigin, swizzledIndicies);
+    float3 B = Swizzle(v1 - rayOrigin, swizzledIndicies);
+    float3 C = Swizzle(v2 - rayOrigin, swizzledIndicies);
 
     A.xy = A.xy - shear.xy * A.z;
     B.xy = B.xy - shear.xy * B.z;
@@ -244,19 +272,19 @@ void RayTriangleIntersect(
 #define MULTIPLE_LEAVES_PER_NODE 0
 bool TestLeafNodeIntersections(
     RWByteAddressBufferPointer accelStruct,
-    uint2 info,
+    uint2 flags,
     uint instanceFlags,
     float3 rayOrigin,
     float3 rayDirection,
-    int3 swizzledIndices,
+    int3 swizzledIndicies,
     float3 shear,
     inout float2 resultBary,
     inout float resultT,
     inout uint resultTriId)
 {
     // Intersect a bunch of triangles
-    const uint firstId = GetLeafIndexFromInfo(info);
-    const uint numTris = GetNumPrimitivesFromInfo(info);
+    const uint firstId = flags.x & 0x00ffffff;
+    const uint numTris = flags.y;
 
     // Unroll mildly, it'd be awesome if we had some helpers here to intersect.
     uint i = 0;
@@ -285,7 +313,7 @@ bool TestLeafNodeIntersections(
             bary0,
             rayOrigin,
             rayDirection,
-            swizzledIndices,
+            swizzledIndicies,
             shear,
             v00, v01, v02);
 
@@ -296,7 +324,7 @@ bool TestLeafNodeIntersections(
             bary1,
             rayOrigin,
             rayDirection,
-            swizzledIndices,
+            swizzledIndicies,
             shear,
             v10, v11, v12);
 
@@ -336,7 +364,7 @@ bool TestLeafNodeIntersections(
             bary0,
             rayOrigin,
             rayDirection,
-            swizzledIndices,
+            swizzledIndicies,
             shear,
             v0, v1, v2);
 
@@ -472,27 +500,17 @@ bool GetBoolFlag(uint flagContainer, uint flag)
     return flagContainer & flag;
 }
 
-uint GetHitGroupRecordOffset(
-    in uint primitiveGeometryContributionToHitGroupIndex,
-    in uint instanceOffset,
-    in uint MultiplierForGeometryContributionToHitGroupIndex,
-    in uint RayContributionToHitGroupIndex,
-    in uint HitGroupShaderRecordStride
-)
-{
-    uint hitGroupGeometryContribution = primitiveGeometryContributionToHitGroupIndex * MultiplierForGeometryContributionToHitGroupIndex;
-    uint hitGroupRecordIndex = RayContributionToHitGroupIndex + hitGroupGeometryContribution + instanceOffset;
-    uint hitGroupRecordOffset = HitGroupShaderRecordStride * hitGroupRecordIndex;
-
-    return hitGroupRecordOffset;
-}
-
 struct BLASContext {
     uint instanceIndex;
     uint instanceFlags;
     uint instanceOffset;
     uint instanceId;
     GpuVA instanceGpuVA;
+    
+    float3x4 worldToObject; 
+    float3x4 objectToWorld;
+    float3 objectSpaceOrigin;
+    float3 objectSpaceDirection;
     RayData rayData;
 };
 
@@ -500,12 +518,12 @@ struct BLASContext {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-inline BLASContext GetBLASFromTopLevelLeaf(
+inline bool GetBLASFromTopLevelLeaf(
     in uint2 leafInfo,
     in RWByteAddressBufferPointer topLevelAccelerationStructure,
     in uint offsetToInstanceDescs,
     in uint InstanceInclusionMask,
-    out bool isValidInstance
+    out BLASContext blasContext
 )
 {
     MARK(6, 0);
@@ -519,9 +537,7 @@ inline BLASContext GetBLASFromTopLevelLeaf(
     
     RaytracingInstanceDesc instanceDesc = metadata.instanceDesc;
     
-    isValidInstance = GetInstanceMask(instanceDesc) & InstanceInclusionMask;
-
-    BLASContext blasContext;
+    bool isValidInstance = GetInstanceMask(instanceDesc) & InstanceInclusionMask;
 
     if (isValidInstance)
     {
@@ -534,18 +550,14 @@ inline BLASContext GetBLASFromTopLevelLeaf(
         blasContext.instanceGpuVA = instanceDesc.AccelerationStructure;
         blasContext.instanceFlags = GetInstanceFlags(instanceDesc);
 
-        float3x4 CurrentWorldToObject = CreateMatrix(instanceDesc.Transform);
-        float3x4 CurrentObjectToWorld = CreateMatrix(metadata.ObjectToWorld);
-
-        float3 objectSpaceOrigin = mul(CurrentWorldToObject, float4(WorldRayOrigin(), 1));
-        float3 objectSpaceDirection = mul(CurrentWorldToObject, float4(WorldRayDirection(), 0));
-
-        blasContext.rayData = GetRayData(objectSpaceOrigin, objectSpaceDirection);
-
-        UpdateObjectSpaceProperties(objectSpaceOrigin, objectSpaceDirection, CurrentWorldToObject, CurrentObjectToWorld);
+        blasContext.worldToObject = CreateMatrix(instanceDesc.Transform);
+        blasContext.objectToWorld = CreateMatrix(metadata.ObjectToWorld);
+        blasContext.objectSpaceOrigin = mul(blasContext.worldToObject, float4(WorldRayOrigin(), 1));
+        blasContext.objectSpaceDirection = mul(blasContext.worldToObject, float4(WorldRayDirection(), 0));
+        blasContext.rayData = GetRayData(blasContext.objectSpaceOrigin, blasContext.objectSpaceDirection);
     }
-    
-    return blasContext;
+
+    return isValidInstance;
 }
 
 inline bool CheckHitProcedural(
@@ -628,10 +640,14 @@ inline bool CheckHitTriangles(
         int ret = ACCEPT;
         
         if (anyhitStateId)
+        {
             ret = InvokeAnyHit(anyhitStateId);
+        }
         
         if (ret != IGNORE)
+        {
             Fallback_CommitHit();
+        }
 
         return (ret == END_SEARCH) || (RayFlags() & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH);
     }
@@ -663,13 +679,9 @@ inline bool CheckHitOnBottomLevelLeaf(
 
     if (!culled)
     {
-        uint hitGroupRecordOffset = GetHitGroupRecordOffset(
-            primitiveMetadata.GeometryContributionToHitGroupIndex,
-            blasContext.instanceOffset,
-            MultiplierForGeometryContributionToHitGroupIndex,
-            RayContributionToHitGroupIndex,
-            HitGroupShaderRecordStride
-        );
+        uint hitGroupGeometryContribution = primitiveMetadata.GeometryContributionToHitGroupIndex * MultiplierForGeometryContributionToHitGroupIndex;
+        uint hitGroupRecordIndex = RayContributionToHitGroupIndex + hitGroupGeometryContribution + blasContext.instanceOffset;
+        uint hitGroupRecordOffset = HitGroupShaderRecordStride * hitGroupRecordIndex;
 
         uint primitiveIndex = primitiveMetadata.PrimitiveIndex;
         if (isProceduralGeometry)
@@ -696,197 +708,229 @@ inline bool CheckHitOnBottomLevelLeaf(
     return false;
 }
 
-inline bool TraverseTLAS(
-    // Original function parameters
-    in uint InstanceInclusionMask,
-    in uint RayContributionToHitGroupIndex,
-    in uint MultiplierForGeometryContributionToHitGroupIndex,
-
-    in RayData currentRayData,
-
-    // BVH parameters
-    in RWByteAddressBufferPointer currentBVH,
-    in uint offsetToInstanceDescs,
-    in uint rootIndex
-)
-{
-    uint currentLevel = 0;
-
-    uint nodesToProcess[NUM_BVH_LEVELS];
-    nodesToProcess[BOTTOM_LEVEL_INDEX] = 0;
-    nodesToProcess[TOP_LEVEL_INDEX] = 0;
-    uint bvhLevelIndex = TOP_LEVEL_INDEX;
-
-    // For when we are switching to traversing a bottom-level acceleration structure.
-    BLASContext savedBLASContexts[2];
-    uint blasCtxPtr = 0, numSavedBLAS = 0;
-    BLASContext currentBLASContext;
-
-    StackPush(bvhLevelIndex, nodesToProcess[bvhLevelIndex], rootIndex);
-
-    while (nodesToProcess[bvhLevelIndex] != 0)
-    {
-        uint nodeIndex = StackPop(bvhLevelIndex, nodesToProcess[bvhLevelIndex]);
-
-        uint2 leftInfo, rightInfo;
-        BoundingBox leftBox, rightBox;
-        bool leftHit, rightHit;
-        float leftT, rightT;
-
-        leftBox = GetLeftBoxFromBVH(currentBVH, nodeIndex, leftInfo);
-        rightBox = GetRightBoxFromBVH(currentBVH, nodeIndex, rightInfo);
-
-        leftHit = RayBoxTest(leftT,
-            Fallback_RayTCurrent(),
-            currentRayData.OriginTimesRayInverseDirection,
-            currentRayData.InverseDirection,
-            leftBox.center,
-            leftBox.halfDim);
-
-        rightHit = !IsDummy(rightInfo) && 
-            RayBoxTest(rightT,
-                Fallback_RayTCurrent(),
-                currentRayData.OriginTimesRayInverseDirection,
-                currentRayData.InverseDirection,
-                rightBox.center,
-                rightBox.halfDim);
-
-        RecordClosestBox(currentLevel, leftHit, leftT, rightHit, rightT, g_closestBoxT);
-
-        bool hitOne = leftHit || rightHit;
-        bool hitBoth = leftHit && rightHit;
-        
-        uint2 firstInfo, secondInfo;
-
-        if (hitBoth)
-        {
-            bool rightSideCloser = rightT < leftT;
-
-            if (rightSideCloser)
-            {
-                firstInfo = rightInfo; secondInfo = leftInfo;
-            }
-            else // If equal, traverse the left side first since it's encoded to have fewer triangles
-            {
-                firstInfo = leftInfo; secondInfo = rightInfo;
-            }
-        }
-        else if (hitOne)
-        {
-            firstInfo = leftHit ? leftInfo : rightInfo;
-        }
-
-        bool hasHit = hitOne;
-        uint2 hitInfo = firstInfo;
-        for(uint i = 0; i < 2 && hasHit; i++) // Want this to loop at most twice for first, second
-        {
-            if (IsLeaf(hitInfo))
-            {
-                switch (bvhLevelIndex)
-                {
-                    case TOP_LEVEL_INDEX:
-                    BLASContext blasContext;
-                    bool isValid;
-                    blasContext = GetBLASFromTopLevelLeaf(
-                        hitInfo,
-                        currentBVH,
-                        offsetToInstanceDescs,
-                        InstanceInclusionMask,
-                        isValid
-                    );
-                    if (isValid)
-                    {
-                        savedBLASContexts[numSavedBLAS++] = blasContext;
-                    }
-                    break;
-
-                    case BOTTOM_LEVEL_INDEX:
-                    if (CheckHitOnBottomLevelLeaf(
-                        hitInfo,
-
-                        currentBVH,
-                        currentBLASContext,
-
-                        RayContributionToHitGroupIndex,
-                        MultiplierForGeometryContributionToHitGroupIndex
-                    ))
-                    {
-                        return true; // Done.                        
-                    }
-                    break;
-                }
-            }
-            else
-            {
-                StackPush(bvhLevelIndex, nodesToProcess[bvhLevelIndex], GetChildIndexFromInfo(hitInfo));    
-            }
-
-            hasHit = hitBoth;
-            hitInfo = secondInfo;
-        }
-    
-        if (numSavedBLAS != 0)
-        {
-            if (bvhLevelIndex == TOP_LEVEL_INDEX || nodesToProcess[BOTTOM_LEVEL_INDEX] == 0)
-            {
-                bvhLevelIndex = BOTTOM_LEVEL_INDEX;
-                StackPush(bvhLevelIndex, nodesToProcess[bvhLevelIndex], 0);
-                currentBLASContext = savedBLASContexts[blasCtxPtr++];
-                numSavedBLAS--;
-                if (numSavedBLAS == 0)
-                    blasCtxPtr = 0;                
-                currentBVH = CreateRWByteAddressBufferPointerFromGpuVA(currentBLASContext.instanceGpuVA);
-                currentRayData = currentBLASContext.rayData;
-            }
-        }
-        else if (bvhLevelIndex == BOTTOM_LEVEL_INDEX && nodesToProcess[BOTTOM_LEVEL_INDEX] == 0)
-        {
-            bvhLevelIndex = TOP_LEVEL_INDEX;
-            currentBVH = CreateRWByteAddressBufferPointerFromGpuVA(TopLevelAccelerationStructureGpuVA);
-            currentRayData = GetRayData(WorldRayOrigin(), WorldRayDirection());
-        }
-    }
-
-    return false;
-}
-
 bool Traverse(
     uint InstanceInclusionMask,
     uint RayContributionToHitGroupIndex,
     uint MultiplierForGeometryContributionToHitGroupIndex
 )
 {
-    uint GroupIndex = Fallback_GroupIndex();
-    const GpuVA nullptr = GpuVA(0, 0);
-    
-    RWByteAddressBufferPointer topLevelAccelerationStructure = CreateRWByteAddressBufferPointerFromGpuVA(TopLevelAccelerationStructureGpuVA);
-    uint offsetToInstanceDescs = GetOffsetToInstanceDesc(topLevelAccelerationStructure);
-
-    uint rootNodeIndex = 0;
+    uint GI = Fallback_GroupIndex();
 
     RayData currentRayData = GetRayData(WorldRayOrigin(), WorldRayDirection());
 
+    uint nodesToProcess[NUM_BVH_LEVELS];
+    uint currentBVHLevel = TOP_LEVEL_INDEX;
+    nodesToProcess[TOP_LEVEL_INDEX] = 0;
+    nodesToProcess[BOTTOM_LEVEL_INDEX] = 0;
+
+    BLASContext savedBLASContexts[2];
+    uint blasCtxStorePtr = 0, blasCtxLoadPtr = 0;
+    uint numSavedBLASContexts = 0;
+
+    RWByteAddressBufferPointer topLevelAccelerationStructure = CreateRWByteAddressBufferPointerFromGpuVA(TopLevelAccelerationStructureGpuVA);
+    uint offsetToInstanceDescs = GetOffsetToInstanceDesc(topLevelAccelerationStructure);
+
+    StackPush(nodesToProcess[TOP_LEVEL_INDEX], TOP_LEVEL_INDEX, 0);
+
+    float closestBoxT = FLT_MAX;
     int NO_HIT_SENTINEL = ~0;
     Fallback_SetInstanceIndex(NO_HIT_SENTINEL);
 
-    MARK(1,0);
+    bool endSearch = false;
 
-    TraverseTLAS(
-        InstanceInclusionMask,
-        RayContributionToHitGroupIndex,
-        MultiplierForGeometryContributionToHitGroupIndex,
+    MARK(2, 0);
+    while (nodesToProcess[currentBVHLevel] != 0)
+    {
+        MARK(3, 0);
+        uint thisNodeIndex = StackPop(nodesToProcess[currentBVHLevel], currentBVHLevel);
 
-        currentRayData,
+        BLASContext blasContext = savedBLASContexts[blasCtxLoadPtr];
 
-        topLevelAccelerationStructure,
-        offsetToInstanceDescs, 
-        rootNodeIndex
-    );
+        RWByteAddressBufferPointer currentBVH;
+        if (currentBVHLevel == TOP_LEVEL_INDEX)
+        { currentBVH = topLevelAccelerationStructure; }
+        else
+        { currentBVH = CreateRWByteAddressBufferPointerFromGpuVA(blasContext.instanceGpuVA); }
 
+        MARK(4, 0);
+        uint2 leftInfo, rightInfo;
+        float leftT, rightT;
+        BoundingBox leftBox, rightBox;
+        bool leftHit, rightHit;
+
+        leftBox = GetLeftBoxFromBVH(
+            currentBVH,
+            thisNodeIndex,
+            leftInfo);
+
+        rightBox = GetRightBoxFromBVH(
+            currentBVH,
+            thisNodeIndex,
+            rightInfo);
+        
+        leftHit = RayBoxTest(
+            leftT,
+            RayTCurrent(),
+            currentRayData.OriginTimesRayInverseDirection,
+            currentRayData.InverseDirection,
+            leftBox.center,
+            leftBox.halfDim);
+
+        rightHit = RayBoxTest(
+            rightT,
+            RayTCurrent(),
+            currentRayData.OriginTimesRayInverseDirection,
+            currentRayData.InverseDirection,
+            rightBox.center,
+            rightBox.halfDim);
+
+        RecordClosestBox(currentBVHLevel, leftHit, leftT, rightHit, rightT, g_closestBoxT);
+
+        uint2 firstInfo, secondInfo;
+        bool singleHit, doubleHit;
+        
+        singleHit = leftHit || rightHit;
+        doubleHit = leftHit && rightHit;
+
+        if (doubleHit)
+        {
+            if (rightT < leftT)
+            {
+                firstInfo = rightT; secondInfo = leftT;
+            }
+            else // If equal, traverse the left side first since it's encoded to have fewer triangles
+            {
+                firstInfo = leftT; secondInfo = rightT;  
+            }
+        }
+        else if (singleHit)
+        {
+            firstInfo = leftHit ? leftHit : rightHit;
+        }
+
+        if (singleHit)
+        {
+            if (IsLeaf(firstInfo))
+            {
+                MARK(5, 0);
+                if (currentBVHLevel == TOP_LEVEL_INDEX)
+                {
+                    MARK(6, 0);
+                    if (GetBLASFromTopLevelLeaf(
+                        firstInfo,
+                        topLevelAccelerationStructure,
+                        offsetToInstanceDescs,
+                        InstanceInclusionMask,
+                        savedBLASContexts[blasCtxStorePtr]
+                    ))
+                    {
+                        MARK(7, 0);
+                        blasCtxStorePtr = (blasCtxStorePtr + 1) % 2;
+                        numSavedBLASContexts++;
+                    }
+                }
+                else // if it's a bottom level
+                {
+                    endSearch = CheckHitOnBottomLevelLeaf(
+                        firstInfo,
+                        currentBVH,
+                        blasContext,
+                        RayContributionToHitGroupIndex,
+                        MultiplierForGeometryContributionToHitGroupIndex
+                    );
+                }
+            }
+            else
+            {
+                StackPush(nodesToProcess[currentBVHLevel], currentBVHLevel, GetChildIndexFromInfo(firstInfo));
+            }
+        }
+
+        if (!endSearch && doubleHit)
+        {
+            if (IsLeaf(secondInfo))
+            {
+                MARK(5, 0);
+                if (currentBVHLevel == TOP_LEVEL_INDEX)
+                {
+                    MARK(6, 0);
+                    if (GetBLASFromTopLevelLeaf(
+                        secondInfo,
+                        topLevelAccelerationStructure,
+                        offsetToInstanceDescs,
+                        InstanceInclusionMask,
+                        savedBLASContexts[blasCtxStorePtr]
+                    ))
+                    {
+                        MARK(7, 0);
+                        blasCtxStorePtr = (blasCtxStorePtr + 1) % 2;
+                        numSavedBLASContexts++;
+                    }
+                }
+                else // if it's a bottom level
+                {
+                    endSearch = true;
+                    // endSearch = CheckHitOnBottomLevelLeaf(
+                    //     secondInfo,
+                    //     currentBVH,
+                    //     blasContext,
+                    //     RayContributionToHitGroupIndex,
+                    //     MultiplierForGeometryContributionToHitGroupIndex
+                    // );
+                }
+            }
+            else
+            {
+                StackPush(nodesToProcess[currentBVHLevel], currentBVHLevel, GetChildIndexFromInfo(secondInfo));
+            }
+        }
+
+        if (endSearch)
+        {
+            break;
+        }
+       
+        bool bottomLevelFree = nodesToProcess[BOTTOM_LEVEL_INDEX] == 0; 
+        bool hasSavedBLASContexts = numSavedBLASContexts != 0;
+
+        if (bottomLevelFree)
+        {
+            if (hasSavedBLASContexts)
+            {
+                numSavedBLASContexts--;
+
+                if (currentBVHLevel == TOP_LEVEL_INDEX)
+                {
+                    currentBVHLevel = BOTTOM_LEVEL_INDEX;
+                }
+                else // BOTTOM_LEVEL_INDEX
+                {
+                    blasCtxLoadPtr = (blasCtxLoadPtr + 1) % 2;
+                }
+
+                StackPush(nodesToProcess[BOTTOM_LEVEL_INDEX], BOTTOM_LEVEL_INDEX, 0);
+                
+                blasContext = savedBLASContexts[blasCtxLoadPtr];
+                currentRayData = blasContext.rayData;
+
+                UpdateObjectSpaceProperties(
+                    blasContext.objectSpaceOrigin, 
+                    blasContext.objectSpaceDirection, 
+                    blasContext.worldToObject, 
+                    blasContext.objectToWorld
+                );
+            }
+
+            if (!hasSavedBLASContexts && currentBVHLevel == BOTTOM_LEVEL_INDEX)
+            {
+                currentBVHLevel = TOP_LEVEL_INDEX;
+                blasCtxLoadPtr = blasCtxStorePtr = 0;
+                currentRayData = GetRayData(WorldRayOrigin(), WorldRayDirection());
+            }
+        }
+    }
     MARK(10,0);
-
     bool isHit = Fallback_InstanceIndex() != NO_HIT_SENTINEL;
-
 #if ENABLE_ACCELERATION_STRUCTURE_VISUALIZATION
     if (isHit)
     {
@@ -894,6 +938,5 @@ bool Traverse(
     }
     VisualizeAcceleratonStructure(closestBoxT);
 #endif
-
-    return isHit; 
+    return isHit;   
 }
